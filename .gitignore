@@ -1,0 +1,21 @@
+/node_modules
+/dist
+config.env
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+
+# User uploads (identity documents, payment proofs) must never be committed
+/uploads/
+/src/uploads/*
+!/src/uploads/icons/
+!/src/uploads/traders/
+!/src/uploads/logo-*
+
+src/config/config.env
+*.env
+.env
+dist/
+node_modules/
