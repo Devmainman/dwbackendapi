@@ -19,6 +19,7 @@ export const getPublicSettings = async (req, res) => {
         frontendURL: settings.frontendURL || '',
         logo: settings.logo || '',
         icon: settings.icon || '',
+        dashboardTheme: settings.dashboardTheme || 'amber',
       },
     });
   } catch (error) {

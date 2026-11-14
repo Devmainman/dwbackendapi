@@ -3,6 +3,9 @@ import mongoose from 'mongoose';
 const settingSchema = new mongoose.Schema({
   websiteName: { type: String, default: '' },
 
+  // Colour tone of the user dashboard, picked by the admin.
+  dashboardTheme: { type: String, enum: ['amber', 'classic-blue', 'navy', 'gold', 'silver'], default: 'amber' },
+
   // URLs
   frontendURL: { type: String, default: 'http://localhost:5000/api/admin/login' },
   websiteUrl: { type: String, default: '' },
