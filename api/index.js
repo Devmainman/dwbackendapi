@@ -1,19 +1,50 @@
 // Vercel serverless entry: every request is routed here (see vercel.json).
 // The same Express app runs as a normal server locally / on Render via `npm start`.
+//
+// The app is loaded with a dynamic import so that a startup failure (missing
+// environment variables, database unreachable, a module error) is reported as a
+// readable JSON error and in the function logs, instead of a bare
+// FUNCTION_INVOCATION_FAILED page.
 import '../src/serverless-boot.js';
-import app, { ready } from '../src/app.js';
 
-export const config = { maxDuration: 30 };
+let loaded = null;
+const load = () => {
+  if (!loaded) {
+    loaded = import('../src/app.js').catch((err) => { loaded = null; throw err; });
+  }
+  return loaded;
+};
+
+const send = (res, status, body) => {
+  res.statusCode = status;
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Cache-Control', 'no-store');
+  res.end(JSON.stringify(body));
+};
+
+// Only safe, configuration-level reasons are shown to callers; everything else stays in the logs.
+const publicReason = (err) => {
+  const m = String(err?.message || '');
+  if (err?.expose || /Missing required environment variables/.test(m)) return m;
+  if (/ENOTFOUND|ECONNREFUSED|querySrv|Server selection timed out|bad auth|Authentication failed|IP.*whitelist|not authorized/i.test(m)) {
+    return 'Cannot reach MongoDB. Check MONGO_URI and allow Vercel in Atlas Network Access (0.0.0.0/0).';
+  }
+  return 'The API failed to start. See the Vercel function logs for details.';
+};
 
 export default async function handler(req, res) {
+  let mod;
   try {
-    await ready(); // DB connection + one-time setup, reused while the instance is warm
+    mod = await load();
   } catch (err) {
-    console.error('Startup failed:', err);
-    res.statusCode = 503;
-    res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ success: false, message: 'Service is starting up, please retry in a moment' }));
-    return;
+    console.error('[startup] app failed to load:', err);
+    return send(res, 500, { success: false, stage: 'load', message: publicReason(err) });
   }
-  app(req, res);
+  try {
+    await mod.ready(); // DB connection + one-time setup, reused while the instance is warm
+  } catch (err) {
+    console.error('[startup] ready() failed:', err);
+    return send(res, 503, { success: false, stage: 'database', message: publicReason(err) });
+  }
+  return mod.default(req, res);
 }

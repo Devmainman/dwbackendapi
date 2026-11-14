@@ -21,11 +21,14 @@ if (fs.existsSync(envPath)) {
 const REQUIRED = ['MONGO_URI', 'JWT_SECRET'];
 const missing = REQUIRED.filter((k) => !process.env[k]);
 if (missing.length) {
-  console.error(`❌ Missing required environment variables: ${missing.join(', ')}`);
+  const msg = `Missing required environment variables: ${missing.join(', ')}`;
+  console.error(`❌ ${msg}`);
+  // On Vercel, throw so api/index.js can show the reason instead of a bare crash.
+  if (process.env.VERCEL) throw Object.assign(new Error(msg), { expose: true });
   process.exit(1);
 }
 
-if (process.env.JWT_SECRET.length < 32) {
+if ((process.env.JWT_SECRET || '').length < 32) {
   console.warn('⚠️  JWT_SECRET is shorter than 32 characters. Use a long random secret in production.');
 }
 
