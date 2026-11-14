@@ -28,6 +28,7 @@ import {
 } from '../controllers/adminUserController.js';
 
 import { assignPackage, editUserPackage, unassignPackage } from '../controllers/adminAssignPackage.js';
+import { userStats, bulkStatus, bulkDelete, bulkNotify, userOverview } from '../controllers/adminUserExtras.js';
 // main
 import { getBrowsingHistory, getSessionDetails } from '../controllers/browsingHistoryController.js';
 import { 
@@ -61,6 +62,12 @@ router.use(isAdmin);
 
 // User management routes
 router.get('/users', getUsers);
+router.get('/users/stats', userStats);
+router.post('/users/bulk-status', bulkStatus);
+router.patch('/users/bulk-status', bulkStatus);
+router.post('/users/bulk-delete', bulkDelete);
+router.post('/users/bulk-notify', bulkNotify);
+router.get('/users/:id/overview', userOverview);
 router.get('/users/simple-list', getSimpleUserList);
 router.get('/users/:id', getUser);
 router.put('/users/:id', updateUser);
@@ -80,6 +87,7 @@ router.get('/popup-messages', getPopupMessages);
 // User action routes
 router.post('/users/:userId/packages/:packageId', assignPackage);
 router.patch('/users/:id/edit-package', editUserPackage);
+router.patch('/users/:id/account-package', editUserPackage); // used by the user drawer
 router.delete('/users/:userId/unassign-package', unassignPackage);
 
 router.post('/users/:id/reset-password', resetUserPassword);

@@ -4,8 +4,9 @@ import multer from 'multer';
 import bodyParser from 'body-parser';
 import { authenticate } from '../middleware/auth.js';
 import Currency from '../models/Currency.js';
+import { switchUserCurrency } from '../utils/wallet.js';
 import User from '../models/User.js';
-import { signup, login, getCurrentUser, changePassword, submitPopupForm, payPopupInvoice, getUserAssignments } from '../controllers/userController.js';
+import { signup, login, getCurrentUser, changePassword, submitPopupForm, payPopupInvoice, getUserAssignments, refreshSession } from '../controllers/userController.js';
 import { getActivePopup, completePopup, getAvailablePopupForms, getAvailablePopupInvoices, acknowledgePopupMessage, getAvailablePopupMessages } from '../controllers/popupController.js';
 import { markPackageUpgradeStarted } from '../controllers/userController.js';
 
@@ -59,6 +60,7 @@ const parseFormData = (req, res, next) => {
 // User authentication routes
 router.post('/signup', parseFormData, signup);
 router.post('/login', login);
+router.post('/refresh', refreshSession);
 router.get('/me', authenticate, getCurrentUser);
 router.post('/change-password', authenticate, changePassword);
 
@@ -115,42 +117,18 @@ router.get('/popups/available/invoices', authenticate, getAvailablePopupInvoices
 router.get('/popups/available/messages', authenticate, getAvailablePopupMessages);
 
 router.put('/preferences', authenticate, async (req, res) => {
-  const { currency: newCurrencyCode } = req.body;
-
-  const newCurrency = await Currency.findOne({ code: newCurrencyCode, status: 'Enabled' });
-  if (!newCurrency) return res.status(400).json({ message: 'Invalid currency code' });
-
-  const user = await User.findById(req.user.id);
-  if (!user) return res.status(404).json({ message: 'User not found' });
-
-  const oldCurrency = await Currency.findOne({ code: user.currency });
-  const oldRate = oldCurrency?.rate || 1;
-  const newRate = newCurrency.rate;
-
-  console.log(`User current balance: ${user.balance} ${user.currency}`);
-  console.log(`Old currency rate (to USD): ${oldRate}`);
-  console.log(`New currency rate (to USD): ${newRate}`);
-
-  if (user.currency !== newCurrencyCode) {
-    const convertedBalance = (user.balance / oldRate) * newRate;
-    console.log(`Converted balance in ${newCurrencyCode}: ${convertedBalance}`);
-    
-    user.balance = convertedBalance;
-    user.currency = newCurrencyCode;
-
-    await user.save(); // ✅ This is what saves the new currency and balance!
+  try {
+    const code = String(req.body?.currency || '').toUpperCase();
+    const target = await Currency.findOne({ code, status: 'Enabled' }).select('code').lean();
+    if (!target) return res.status(400).json({ success: false, message: 'Invalid currency code' });
+    const r = await switchUserCurrency(req.user.id, code, { by: 'user' });
+    res.json({ success: true, message: 'Currency and balance updated', currency: r.user.currency, balance: r.user.balance, rate: r.rate });
+  } catch (err) {
+    const status = err.status && err.status < 500 ? err.status : 500;
+    if (status === 500) console.error('preferences error', err);
+    res.status(status).json({ success: false, message: status === 500 ? 'Could not change currency' : err.message });
   }
-
-  res.json({ 
-    success: true, 
-    message: 'Currency and balance updated',
-    currency: user.currency,
-    balance: user.balance
-  });
 });
-
-
-
 
 router.get('/currencies', async (req, res) => {
   const currencies = await Currency.find({ status: 'Enabled' }).select('title code');

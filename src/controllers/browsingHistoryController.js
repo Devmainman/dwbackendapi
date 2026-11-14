@@ -105,6 +105,7 @@ export const getBrowsingHistory = async (req, res) => {
 export const recordVisit = async (req, res) => {
   try {
     const { url, timestamp, sessionId: clientSessionId } = req.body;
+    if (typeof url !== 'string' || !url) return res.status(400).json({ success: false, message: 'url is required' });
     const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
     const user = req.user || null;
     const domain = req.hostname;

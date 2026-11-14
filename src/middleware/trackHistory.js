@@ -27,7 +27,7 @@ export const trackHistory = async (req, res, next) => {
     const ip = req.ip || req.connection.remoteAddress;
     const parser = new UAParser(req.headers['user-agent']); // Instantiate UAParser
     const ua = parser.getResult();
-    const geo = geoip.lookup(ip);
+    const geo = await lookupGeo(req, ip);
 
     const historyEntry = {
       ip,

@@ -11,7 +11,9 @@ router.use(authenticate, isAdmin);
 // Traders
 router.get('/traders', c.getAllTraders);
 router.post('/traders', c.createTrader);
+router.get('/export', c.exportTraders);
 router.get('/traders/:traderId', c.getTraderDetails);
+router.get('/traders/:traderId/analytics', c.getTraderAnalytics);
 router.put('/traders/:traderId/profile', c.updateTraderProfile);
 router.put('/traders/:traderId/settings', c.updateTraderSettings);
 router.put('/traders/:traderId/status', c.updateTraderStatus);

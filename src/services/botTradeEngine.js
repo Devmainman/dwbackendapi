@@ -101,7 +101,7 @@ export const settleTrade = async (tradeId, mode = 'matured') => {
     if (!full) t.profit = 0;
     if (mode !== 'matured') t.endDate = new Date();
     await t.save({ session });
-    await creditUser(t.userId, payout, { session });
+    await creditUser(t.userId, payout, { session, currency: t.currency });
     await recordTransaction({
       userId: t.userId, amount: payout, currency: t.currency, type: 'trade',
       metadata: { action: full ? 'payout' : 'refund', reason: mode, tradeId: t._id }, session, prefix: 'TRD'

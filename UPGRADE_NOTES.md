@@ -111,3 +111,128 @@ Admin API (`/api/admin/copy-trading`): trader CRUD (`/traders`, `/traders/:trade
   - `POST /welcome`
 - **Live updates:** the WebSocket at `/api/notifications/ws?token=…` sends `{ type: 'notification', data: { kind: 'notification.created' | 'notification.count', notification?, unreadCount } }`.
 - **Admin:** `GET /api/admin/dashboard/notifications` now reads from the collection.
+
+## Currency conversion
+
+- **One converter.** `src/services/fx.js` is now the only place rates are read. `Currency.rate` means "units per 1 USD" and every conversion is `amount × rate(to) ÷ rate(from)`.
+- **Live rates.** Rates sync from open.er-api.com (no key) at start-up and on the interval set in Admin → Settings → Currency (default every 6 hours). Admins can also sync on demand, turn auto-sync off, and test a conversion on that page. `FX_SYNC=off` disables it.
+- **Switching currency is atomic.** The user's balance converts at today's rate in a transaction and is logged as a `currency_conversion` transaction. The same path is used by the home screen picker, profile setup and the admin user editor (which previously relabelled the balance without converting it).
+- **Payouts follow the user.** Stakes, trades, vaults, cards, deposits and withdrawal refunds keep the currency they were made in. If the user has since switched currency, the payout is converted at credit time. Before this, a stake opened in USD paid back the same number in EUR.
+- Withdrawal method limits are now converted from the method's own currency before checking the amount.
+
+## Admin panel
+
+New **Products** section:
+- Overview of every product.
+- Feature switches and fees.
+- Real estate projects, with full editing and investments.
+- Staking pools and stakes.
+- Stocks, including bulk price updates and holdings.
+- Cold storage: hold, release and notes.
+- Cards: approve, decline, freeze.
+- Connected wallets.
+
+Also new:
+- Trades → Live Markets (force-close at the live price) and Package Trades (complete or terminate).
+- Mining → Shop Catalog (prices and yields).
+- Notifications (broadcast or send to one user).
+- Live FX panel on Currency settings.
+
+New backend routes live under `/api/admin/ops/*`.
+
+Fixed endpoints the panel called but which were missing or crashing:
+- copy-trading export and trader analytics
+- copied-trades export
+- signal invoice reject
+- user account-package update
+- verification counts (crashed)
+
+## User app fixes
+
+- `/api/users/refresh` existed in the client only. Expired sessions were logged out instead of refreshed. It is now implemented: valid tokens up to 7 days past expiry, never for admin impersonation tokens.
+- "Subscribe" on the upgrade pages called a missing endpoint. It now opens the payment page for that package.
+- Wrong URLs fixed: popup invoice payment, payment methods, and package and signal icons (now served from the API host).
+- UI:
+  - Page transitions.
+  - Animated bottom tab bar.
+  - The centre button opens a quick-actions sheet.
+  - Currency picker sheet with search and the conversion shown.
+  - Animated balance.
+  - Shimmer skeleton loaders.
+
+## Deploying
+
+- **Frontends (Vercel):** `tradingfrontend` and `tradingvisualpanel` each have a `vercel.json` (SPA rewrites, asset caching, security headers).
+  - Set `VITE_API_BASE_URL=https://<api-host>/api` in each Vercel project.
+  - `VITE_STATIC_BASE_URL` is optional; it defaults to the API host.
+- **API (Render):** keep the backend on Render (`render.yaml`). It uses WebSockets and background timers, which Vercel functions don't support.
+  - Set `FRONTEND_URL`, `ADMIN_URL` and optionally `CORS_ORIGINS`.
+  - Wildcards such as `https://*.vercel.app` are accepted so preview deployments work.
+
+## Assets, desktop layout, welcome, Manage Users
+
+- **Assets (`/assets`)** lists everything a user holds, itemised and valued in their current currency:
+  - cash
+  - staked crypto at live prices
+  - stocks
+  - real estate, including accrued income
+  - bot trades and live positions, with unrealised P/L
+  - copy trading
+  - vaults
+  - cards
+  - unclaimed mining rewards
+
+  It also shows an allocation ring, P/L on invested money, and a by-product breakdown. The API is `GET /api/portfolio/holdings`. `/portfolio/summary` now uses the same calculation, so totals are correct after a currency switch.
+- **Desktop arrangement for shared pages.** The shared `Page` shell (`components/products/ui.jsx`) now renders the established desktop layout on screens wider than 768px:
+  - large title
+  - the three statistics cards
+  - signal strength bar
+  - full-width content
+
+  Mobile rendering is unchanged. This covers Investing, Staking, Real Estate, Cold Storage, Cards, Wallets, Trading, Live Markets, Mining, Copy Trading and Assets.
+- **Welcome moments:**
+  - After sign-in, a short "Welcome back, Name" splash.
+  - After registration, a "Welcome aboard" splash, then a one-time 4-slide tour once the user reaches the app.
+  - Both live in `components/welcome/WelcomeExperience.jsx` and respect reduced motion.
+- **Admin → Manage users** was rebuilt:
+  - Stats tiles, debounced search, a status filter, page size, and selection across rows.
+  - Bulk activate, block, notify and delete (typed confirmation).
+  - A user drawer with tabs: Overview, Profile, Wallet, Controls and Messages.
+    - Overview shows holdings, deposits, withdrawals and transactions.
+    - Profile covers details and verification.
+    - Wallet covers atomic credit/debit and currency conversion.
+    - Controls covers block, trading, withdrawal lock, signal, package, password and open-as-user.
+    - Messages covers direct messages and popup assignment.
+- **Backend fixes:**
+  - Balance adjustments are atomic; concurrent debits can't overdraw.
+  - The profile update only accepts profile fields (it used to accept any field, including password and verification).
+  - Phones are stored in international `+` format.
+  - Password resets need 8+ characters.
+  - Bulk endpoints and `/admin/users/:id/overview` and `/admin/users/stats` were added.
+
+## Deploying the API on Vercel
+
+The API runs on Vercel as a single function (`api/index.js`) and on Render or a VPS as a normal server (`npm start`). It's the same code.
+
+**Vercel setup:**
+1. Import the repo. There is no build step (`vercel-build` is a no-op).
+2. Set these environment variables:
+   - `MONGO_URI`: an Atlas replica set.
+   - `JWT_SECRET`: 48+ random characters.
+   - `FRONTEND_URL` and `ADMIN_URL`: your Vercel URLs.
+   - `CORS_ORIGINS`: optional, for example `https://*.vercel.app`.
+   - `CRON_SECRET`: any random string.
+   - `NODE_ENV=production`.
+3. Storage → create a **Blob** store and connect it to the project. Vercel adds `BLOB_READ_WRITE_TOKEN`. Without it, uploads (deposit proofs, KYC, tickets, icons) return a clear 503, because Vercel's disk is read-only.
+4. In Atlas, allow Vercel's IPs, or `0.0.0.0/0` with a strong password.
+
+**What changes on serverless:**
+- **Background jobs** (bot trade settlement, stop-loss/take-profit/liquidation, mining session expiry, copy-trading mark prices, FX sync):
+  - They run at most once a minute when the API receives traffic (`waitUntil`, so responses aren't delayed).
+  - They also run from a daily Vercel Cron that calls `/api/cron/tick`.
+  - On a Pro plan, change the schedule in `vercel.json` to `*/5 * * * *` for steadier settlement without traffic.
+- **WebSockets** aren't available. After two failed socket attempts the app polls for notifications every 30s, so new items show up within 30 seconds instead of instantly.
+- **Uploads** go to Vercel Blob under the same `/uploads/...` paths. The `/uploads` route redirects to Blob. Identity documents are stored under an unguessable key and are still only served through the signed admin link.
+- **Geolocation** for browsing history uses Vercel's IP headers instead of the bundled geoip database.
+
+For instant notifications and second-level settlement, deploy the API on Render instead (`render.yaml`). Nothing else changes.

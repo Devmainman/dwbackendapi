@@ -6,21 +6,24 @@
   "scripts": {
     "dev": "nodemon src/app.js",
     "start": "node src/app.js",
-    "build": "esbuild src/app.js --bundle --platform=node --target=node18 --format=esm --outfile=dist/app.js",
-    "secure": "npm run build && javascript-obfuscator dist/app.js --output dist/app.obf.js",
+    "secure": "npm run bundle && javascript-obfuscator dist/app.js --output dist/app.obf.js",
     "obfuscate": "javascript-obfuscator dist/app.js --output dist/app.obf.js --config obfuscator-config.cjs",
     "start:obf": "node dist/app.obf.js",
     "seed": "node seed.js",
     "seed:mining": "node seed.js --mining",
     "seed:trading": "node scripts/seedTraders.js",
     "seed:products": "node scripts/seedProducts.js",
-    "create-admin": "node scripts/createAdmin.js"
+    "create-admin": "node scripts/createAdmin.js",
+    "vercel-build": "echo \"No build step: the API runs from source on Vercel\"",
+    "bundle": "esbuild src/app.js --bundle --platform=node --target=node20 --format=esm --packages=external --outfile=dist/app.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "Backend API for Investment Platform",
   "dependencies": {
+    "@vercel/blob": "^1.1.1",
+    "@vercel/functions": "^2.2.13",
     "axios": "^1.21.1",
     "bcryptjs": "^2.4.3",
     "cloudinary": "^1.41.1",
@@ -54,6 +57,6 @@
     "nodemon": "^3.1.10"
   },
   "engines": {
-    "node": ">=18"
+    "node": "20.x"
   }
 }

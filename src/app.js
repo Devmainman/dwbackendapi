@@ -10,6 +10,8 @@ import qs from 'qs';
 import fileUpload from 'express-fileupload';
 import expressWs from 'express-ws';
 import cookieParser from 'cookie-parser';
+import { routeUploadsToBlob, serveUploadFromBlob, streamPrivateFromBlob, blobEnabled, isServerless } from './services/storage.js';
+import { runDueJobs, jobsOnTraffic } from './services/jobs.js';
 
 import connectDB from './config/db.js';
 import { UPLOAD_ROOT, PRIVATE_UPLOAD_DIRS, safeFileName } from './config/paths.js';
@@ -30,6 +32,7 @@ import { migrateEmbeddedNotifications } from './services/notificationService.js'
 import { migrateLegacyTrades, startTradeSettlementJob } from './services/botTradeEngine.js';
 import { migrateLegacySimTrades, startStopMonitor } from './controllers/marketTradingController.js';
 import { startMiningJob } from './services/miningEngine.js';
+import { startFxSyncJob } from './services/fx.js';
 
 // Existing routes
 import userRoutes from './routes/userRoutes.js';
@@ -90,6 +93,7 @@ import stakingRoutes from './routes/stakingRoutes.js';
 import realEstateRoutes from './routes/realEstateRoutes.js';
 import portfolioRoutes from './routes/portfolioRoutes.js';
 import adminProductRoutes from './routes/adminProductRoutes.js';
+import adminOpsRoutes from './routes/adminOpsRoutes.js';
 
 import './models/PopupForm.js';
 import './models/PopupInvoice.js';
@@ -123,9 +127,19 @@ if (allowedOrigins.length === 0) {
   console.warn('⚠️  CORS_ORIGINS / FRONTEND_URL not set: allowing all origins. Set them in production.');
 }
 
+// Entries may contain one wildcard label, e.g. https://*.vercel.app for preview deployments.
+const escapeRe = (s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+const originPatterns = allowedOrigins
+  .filter((o) => o.includes('*'))
+  .map((o) => new RegExp(`^${escapeRe(o).replace('\\*', '*').replace('*', '[a-z0-9-]+')}$`, 'i'));
+const originAllowed = (origin) => {
+  const o = origin.replace(/\/$/, '');
+  return allowedOrigins.includes(o) || originPatterns.some((re) => re.test(o));
+};
+
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin.replace(/\/$/, ''))) {
+    if (!origin || allowedOrigins.length === 0 || originAllowed(origin)) {
       return cb(null, true);
     }
     return cb(null, false);
@@ -157,10 +171,11 @@ app.use((req, res, next) => {
   next();
 });
 app.use(sanitizeRequest);
+app.use(routeUploadsToBlob); // Vercel: uploads go to Blob storage instead of the read-only disk
 
 /* --------------------------- Static files --------------------------- */
 
-fs.mkdirSync(UPLOAD_ROOT, { recursive: true });
+if (!isServerless()) fs.mkdirSync(UPLOAD_ROOT, { recursive: true });
 
 // Identity documents are never served statically.
 const blockPrivateUploads = (req, res, next) => {
@@ -172,19 +187,25 @@ const blockPrivateUploads = (req, res, next) => {
 };
 const staticOpts = { dotfiles: 'deny', index: false, maxAge: isProd ? '7d' : 0 };
 
-app.use('/uploads', blockPrivateUploads, express.static(UPLOAD_ROOT, staticOpts));
-app.use('/Uploads', blockPrivateUploads, express.static(UPLOAD_ROOT, staticOpts)); // legacy URLs
+app.use('/uploads', blockPrivateUploads, express.static(UPLOAD_ROOT, staticOpts), serveUploadFromBlob);
+app.use('/Uploads', blockPrivateUploads, express.static(UPLOAD_ROOT, staticOpts), serveUploadFromBlob); // legacy URLs
 app.use('/icons', express.static(path.join(UPLOAD_ROOT, 'icons'), staticOpts));
 
 // Short-lived signed access to identity documents (URLs are generated for admins).
-app.get('/api/files/private/:folder/:file', (req, res) => {
+app.get('/api/files/private/:folder/:file', async (req, res) => {
   const folder = String(req.params.folder);
   const file = safeFileName(req.params.file);
   if (!PRIVATE_UPLOAD_DIRS.includes(folder) || !verifySignedFile(folder, file, req.query.exp, req.query.sig)) {
     return res.status(403).json({ success: false, message: 'Link expired or invalid' });
   }
   res.set('Cache-Control', 'private, no-store');
-  res.sendFile(path.join(UPLOAD_ROOT, folder, file), (err) => {
+  const local = path.join(UPLOAD_ROOT, folder, file);
+  if (blobEnabled() && !fs.existsSync(local)) {
+    const ok = await streamPrivateFromBlob(folder, file, res).catch(() => false);
+    if (!ok && !res.headersSent) res.status(404).json({ success: false, message: 'File not found' });
+    return;
+  }
+  res.sendFile(local, (err) => {
     if (err && !res.headersSent) res.status(404).json({ success: false, message: 'File not found' });
   });
 });
@@ -193,6 +214,17 @@ app.get('/api/files/private/:folder/:file', (req, res) => {
 
 app.use('/api', apiLimiter);
 app.use(trackHistory);
+
+// Serverless: periodic jobs (settlement, stop-loss, mining, prices, FX) run on traffic + cron.
+if (isServerless()) app.use(jobsOnTraffic());
+
+// Vercel Cron (and any scheduler) can call this. Protected by CRON_SECRET when set.
+app.get('/api/cron/tick', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (secret && req.get('authorization') !== `Bearer ${secret}`) return res.status(401).json({ success: false, message: 'Unauthorized' });
+  const result = await runDueJobs();
+  res.json({ success: true, ...result });
+});
 
 app.get('/', (_req, res) => res.send('API is running...'));
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
@@ -262,6 +294,7 @@ app.use('/api/staking', stakingRoutes);
 app.use('/api/real-estate', realEstateRoutes);
 app.use('/api/portfolio', portfolioRoutes);
 app.use('/api/admin/products', adminProductRoutes);
+app.use('/api/admin/ops', adminOpsRoutes);
 
 /* ---------------------------- WebSockets ---------------------------- */
 
@@ -294,33 +327,46 @@ expressWsInstance.app.ws('/api/notifications/ws', (ws, req) => {
 app.use('/api', notFound);
 app.use(errorHandler);
 
-const heartbeatInterval = setInterval(() => {
-  forEachConnection((ws, userId) => {
-    if (ws.isAlive === false) {
-      unregisterConnection(userId, ws);
-      return ws.terminate();
-    }
-    ws.isAlive = false;
-    ws.ping();
-  });
-}, 30000);
-
 /* ------------------------------ Startup ----------------------------- */
 
-const PORT = env.PORT || 5000;
+// One-time setup (DB connection, seed data, idempotent migrations). Memoised so a
+// serverless instance does it once per cold start.
+let readyPromise = null;
+export const ready = () => {
+  if (!readyPromise) {
+    readyPromise = (async () => {
+      await connectDB();
+      await initializeCurrencies();
+      await migrateLegacyCopyData().catch((err) => console.error('Copy trading migration failed:', err));
+      await migrateEmbeddedNotifications().catch((err) => console.error('Notification migration failed:', err));
+      await backfillTraderAvatars().catch((err) => console.error('Trader avatar backfill failed:', err));
+      await settleOrphanedPositions().catch((err) => console.error('Copy trading recovery failed:', err));
+      await migrateLegacyTrades().catch((err) => console.error('Legacy trade migration failed:', err));
+      await migrateLegacySimTrades().catch((err) => console.error('Legacy sim migration failed:', err));
+    })().catch((err) => { readyPromise = null; throw err; });
+  }
+  return readyPromise;
+};
 
-connectDB().then(async () => {
-  await initializeCurrencies();
-  await migrateLegacyCopyData().catch((err) => console.error('Copy trading migration failed:', err));
-  await migrateEmbeddedNotifications().catch((err) => console.error('Notification migration failed:', err));
-  await backfillTraderAvatars().catch((err) => console.error('Trader avatar backfill failed:', err));
-  await settleOrphanedPositions().catch((err) => console.error('Copy trading recovery failed:', err));
-  await migrateLegacyTrades().catch((err) => console.error('Legacy trade migration failed:', err));
+/** Long-running server (local, Render, VPS): listen + background timers + WebSocket heartbeat. */
+export const startServer = async () => {
+  await ready();
+  const PORT = env.PORT || 5000;
+  const heartbeatInterval = setInterval(() => {
+    forEachConnection((ws, userId) => {
+      if (ws.isAlive === false) {
+        unregisterConnection(userId, ws);
+        return ws.terminate();
+      }
+      ws.isAlive = false;
+      ws.ping();
+    });
+  }, 30000);
   const priceFeed = env.NODE_ENV === 'test' ? null : startMarkPriceFeed();
   const tradeJob = startTradeSettlementJob();
-  await migrateLegacySimTrades().catch((err) => console.error('Legacy sim migration failed:', err));
   const stopMonitor = env.NODE_ENV === 'test' ? null : startStopMonitor();
   const miningJob = startMiningJob();
+  const fxJob = startFxSyncJob();
   const server = app.listen(PORT, () => {
     console.log(`Server running in ${env.NODE_ENV || 'development'} mode on port ${PORT}`);
   });
@@ -331,12 +377,22 @@ connectDB().then(async () => {
     clearInterval(tradeJob);
     if (stopMonitor) clearInterval(stopMonitor);
     clearInterval(miningJob);
+    if (fxJob) clearInterval(fxJob);
     forEachConnection((ws) => ws.close(1001, 'Server shutting down'));
     server.close(() => process.exit(0));
   };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
-});
+  return server;
+};
+
+// On Vercel the app is exported to api/index.js instead of listening itself.
+if (!isServerless()) {
+  startServer().catch((err) => {
+    console.error('Server failed to start:', err);
+    process.exit(1);
+  });
+}
 
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled rejection:', err);

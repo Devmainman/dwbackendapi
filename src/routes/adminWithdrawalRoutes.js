@@ -81,7 +81,7 @@ router.put('/:id', async (req, res) => {
       );
 
       if (status === 'rejected') {
-        await creditUser(withdrawal.user, withdrawal.amount, { session });
+        await creditUser(withdrawal.user, withdrawal.amount, { session, currency: withdrawal.currency });
       }
       return withdrawal;
     });

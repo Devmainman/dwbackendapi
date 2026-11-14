@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [{ "source": "/(.*)", "destination": "/api" }],
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 30,
+      "includeFiles": "src/uploads/{icons,traders}/**"
+    }
+  },
+  "crons": [{ "path": "/api/cron/tick", "schedule": "0 5 * * *" }]
+}

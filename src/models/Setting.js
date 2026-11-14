@@ -13,6 +13,10 @@ const settingSchema = new mongoose.Schema({
   currencyApiUrl: { type: String, default: 'http://api.exchangerate.host/convert' },
   currencyInterval: { type: String, default: 'Every Six Hours' },
   defaultCurrency: { type: String, default: '' },
+  currencyAutoSync: { type: Boolean, default: true },
+  currencyLastSyncedAt: { type: Date },
+  currencyRateSource: { type: String, default: '' },
+  miningCatalog: { type: mongoose.Schema.Types.Mixed, default: {} },
 
   exchangeRates: {
   type: Object,

@@ -1,3 +1,6 @@
+import { rateBetween } from '../services/fx.js';
+import { creditUser, addRounded } from '../utils/wallet.js';
+import { round2 } from '../utils/money.js';
 import { notifyUser } from '../services/notificationService.js';
 import Deposit from '../models/Deposit.js';
 import User from '../models/User.js';
@@ -269,16 +272,8 @@ export const updateDepositStatus = async (req, res) => {
     // Handle balance updates and transaction status changes
     if (status === 'approved' && previousStatus !== 'approved') {
       // Update user balance
-      const user = await User.findByIdAndUpdate(
-        deposit.userId, 
-        { $inc: { balance: deposit.amount } },
-        { session, new: true }
-      );
-      
-      console.log(`[DEBUG] User ${deposit.userId} balance updated:`, 
-        `Previous: ${user.balance - deposit.amount}`, 
-        `New: ${user.balance}`
-      );
+      // Credited in the currency the deposit was made in, converted if the account has since switched.
+      await creditUser(deposit.userId, deposit.amount, { session, currency: deposit.currency });
 
       // Update transaction status
       await Transaction.updateOne(
@@ -290,16 +285,9 @@ export const updateDepositStatus = async (req, res) => {
     else if (status === 'rejected') {
       // Handle balance reversal for previously approved deposits
       if (previousStatus === 'approved') {
-        const user = await User.findByIdAndUpdate(
-          deposit.userId, 
-          { $inc: { balance: -deposit.amount } },
-          { session, new: true }
-        );
-        
-        console.log(`[DEBUG] User ${deposit.userId} balance reversed:`, 
-          `Previous: ${user.balance + deposit.amount}`, 
-          `New: ${user.balance}`
-        );
+        const holder = await User.findById(deposit.userId).select('currency').session(session).lean();
+        const back = round2(deposit.amount * (await rateBetween(deposit.currency || holder?.currency, holder?.currency)));
+        await User.updateOne({ _id: deposit.userId }, addRounded(-back), { session });
       }
       
       // Update transaction status to failed for all rejections

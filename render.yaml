@@ -1,3 +1,5 @@
+# API server (Express + WebSockets + background jobs). Runs on Render, not Vercel:
+# Vercel functions can't hold WebSocket connections or run the settlement timers.
 services:
   - type: web
     name: devprov
@@ -5,10 +7,17 @@ services:
     plan: free
     buildCommand: npm ci
     startCommand: npm start
+    healthCheckPath: /api/public/settings
     envVars:
       - key: NODE_ENV
         value: production
-    routes:
-      - type: rewrite
-        source: /uploads/(.*)
-        destination: /uploads/$1
+      - key: MONGO_URI          # MongoDB Atlas (replica set, needed for transactions)
+        sync: false
+      - key: JWT_SECRET         # 48+ random characters
+        sync: false
+      - key: FRONTEND_URL       # e.g. https://your-app.vercel.app
+        sync: false
+      - key: ADMIN_URL          # e.g. https://your-admin.vercel.app
+        sync: false
+      - key: CORS_ORIGINS       # optional extra origins, comma separated; wildcards allowed: https://*.vercel.app
+        sync: false

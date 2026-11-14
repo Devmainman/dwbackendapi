@@ -1,3 +1,5 @@
+import Currency from '../models/Currency.js';
+import { switchUserCurrency } from '../utils/wallet.js';
 import env from '../config/env.js';
 import twilio from 'twilio';
 import User from '../models/User.js';
@@ -122,7 +124,6 @@ export const completeProfile = async (req, res) => {
     user.currency = currency;
 
     const savedUser = await user.save();
-    console.log('Profile updated successfully:', savedUser);
 
     res.json({ 
       success: true,

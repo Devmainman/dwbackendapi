@@ -34,6 +34,8 @@ export const buildAvatarSvg = (trader) => {
 
 /** Write the default avatar file and return its public URL. */
 export const createDefaultAvatar = (trader) => {
+  // Serverless (Vercel): no writable disk, so embed the SVG directly.
+  if (process.env.VERCEL) return `data:image/svg+xml;base64,${Buffer.from(buildAvatarSvg(trader)).toString('base64')}`;
   const id = String(trader.traderId).replace(/[^A-Za-z0-9_-]/g, '');
   const filename = `default_${id}.svg`;
   fs.writeFileSync(path.join(uploadDir('traders'), filename), buildAvatarSvg(trader));
@@ -42,6 +44,7 @@ export const createDefaultAvatar = (trader) => {
 
 /** Give every trader without a picture (or whose picture file is missing) a default one. */
 export const backfillTraderAvatars = async () => {
+  if (process.env.VERCEL) return 0; // files can't be checked or written on serverless
   const traders = await Trader.find().select('traderId username fullName avatar');
   let fixed = 0;
   for (const t of traders) {

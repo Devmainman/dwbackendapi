@@ -8,7 +8,8 @@ import Assignment from '../models/Assignment.js';
 import Package from '../models/Package.js';
 import Setting from '../models/Setting.js';
 import jwt from 'jsonwebtoken';
-import Currency from '../models/Currency.js'; 
+import Currency from '../models/Currency.js';
+import { switchUserCurrency, withTransaction, creditUser, debitUser, recordTransaction } from '../utils/wallet.js';
 import { sendNotification } from '../services/realtime.js';
 import { activeConnections } from '../services/realtime.js';
 
@@ -51,13 +52,33 @@ const transformUserForFrontend = (user) => {
         tradingSignalUpdatedAt: user.tradingSignalUpdatedAt,
         withdrawalLocked: user.withdrawalLocked || false,
         messages: user.messages || [],
-        isOnline: activeConnections.has(user._id.toString()) // 🔥 Add this line
+        lastLogin: user.lastLogin || null,
+        signalStrength: user.tradingSignalStrength ?? 0,
+        blockReason: user.blockReason || '',
+        gender: user.gender || '',
+        isOnline: activeConnections.has(user._id.toString())
     };
 };
 
 
-const transformRequestToDB = (data) => {
-    const transformed = { ...data };
+// Only profile fields can be edited here; money, status, passwords and
+// verification have their own audited endpoints.
+const EDITABLE = ['firstName', 'lastName', 'email', 'mobile', 'phoneNumber', 'country', 'gender', 'address', 'currency', 'dateOfBirth'];
+const transformRequestToDB = (data = {}) => {
+    const transformed = Object.fromEntries(Object.entries(data).filter(([k]) => EDITABLE.includes(k)));
+    for (const k of ['firstName', 'lastName', 'country', 'gender']) {
+        if (typeof transformed[k] === 'string') transformed[k] = transformed[k].trim().slice(0, 80);
+        else if (k in transformed && transformed[k] != null) delete transformed[k];
+    }
+    if (transformed.email !== undefined) {
+        const email = String(transformed.email).trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            const e = new Error('Enter a valid email address');
+            e.status = 400;
+            throw e;
+        }
+        transformed.email = email;
+    }
     
     const phoneValue = data.phoneNumber ?? data.mobile;
     
@@ -67,11 +88,13 @@ const transformRequestToDB = (data) => {
         if (!cleaned) {
             delete transformed.mobile;
         } else if (cleaned.length === 11 && cleaned.startsWith('0')) {
-            transformed.mobile = '234' + cleaned.slice(1);
-        } else if (cleaned.length === 13 && cleaned.startsWith('234')) {
-            transformed.mobile = cleaned;
+            transformed.mobile = '+234' + cleaned.slice(1);
+        } else if (cleaned.length >= 7 && cleaned.length <= 15) {
+            transformed.mobile = '+' + cleaned;
         } else {
-            throw new Error('Invalid phone number format');
+            const e = new Error('Phone number must have 7 to 15 digits');
+            e.status = 400;
+            throw e;
         }
     }
     
@@ -88,6 +111,7 @@ export const getSimpleUserList = async (req, res) => {
       const users = await User.find({}, 'firstName lastName accountId email');
   
       const formattedUsers = users.map(user => ({
+        _id: user._id,
         accountId: user.accountId,
         email: user.email,
         fullName: `${user.firstName || ''} ${user.lastName || ''}`.trim()
@@ -121,10 +145,10 @@ export const getUsers = async (req, res) => {
         }
         
         const users = await User.find(query)
-            .select('firstName lastName email mobile country currency accountId accountType balance status joinedDate address verification tradingEnabled tradingSignal tradingSignalUpdatedAt withdrawalLocked messages') // CHANGED: walletBalance → balance
+            .select('firstName lastName email mobile country currency accountId accountType balance status joinedDate address verification tradingEnabled tradingSignal tradingSignalUpdatedAt withdrawalLocked messages lastLogin createdAt blockReason gender tradingSignalStrength') // CHANGED: walletBalance → balance
             .populate('accountType')
-            .skip((page - 1) * limit)
-            .limit(limit)
+            .skip((Math.max(1, parseInt(page, 10) || 1) - 1) * Math.min(100, Math.max(1, parseInt(limit, 10) || 10)))
+            .limit(Math.min(100, Math.max(1, parseInt(limit, 10) || 10)))
             .sort({ joinedDate: -1 });
         
         const total = await User.countDocuments(query);
@@ -134,7 +158,7 @@ export const getUsers = async (req, res) => {
             users: users.map(transformUserForFrontend),
             total,
             page: Number(page),
-            pages: Math.ceil(total / limit)
+            pages: Math.ceil(total / Math.min(100, Math.max(1, parseInt(limit, 10) || 10)))
         });
     } catch (err) {
         console.error('Admin getUsers error:', err);
@@ -148,7 +172,7 @@ export const getUsers = async (req, res) => {
 export const getUser = async (req, res) => {
     try {
         const user = await User.findById(req.params.id)
-  .select('firstName lastName email mobile country currency accountId accountType balance status joinedDate address verification tradingEnabled tradingSignal tradingSignalUpdatedAt withdrawalLocked messages')
+  .select('firstName lastName email mobile country currency accountId accountType balance status joinedDate address verification tradingEnabled tradingSignal tradingSignalUpdatedAt withdrawalLocked messages lastLogin createdAt blockReason gender tradingSignalStrength')
   .populate('accountType');
 
 
@@ -179,7 +203,6 @@ export const updateUser = async (req, res) => {
         const updates = transformRequestToDB(req.body);
         const currentUser = await User.findById(id);
 
-        console.log('Received update for user:', id, updates);
 
         if ('balance' in req.body) {
             console.warn('[SECURITY] Attempt to update balance via profile update blocked.');
@@ -226,6 +249,14 @@ export const updateUser = async (req, res) => {
             }
         }
         
+        // Currency changes go through the converter so the balance follows the currency.
+        const newCurrency = updates.currency ? String(updates.currency).toUpperCase() : null;
+        delete updates.currency;
+        delete updates.balance;
+        if (newCurrency && newCurrency !== currentUser.currency) {
+            await switchUserCurrency(id, newCurrency, { by: 'admin' });
+        }
+
         const user = await User.findByIdAndUpdate(
             id, 
             updates, 
@@ -267,13 +298,18 @@ export const updateUser = async (req, res) => {
         }
         
         if (err.code === 11000) {
+            const field = Object.keys(err.keyPattern || err.keyValue || {})[0] || 'value';
             return res.status(400).json({
                 success: false,
-                message: 'Mobile number already exists in system'
+                message: field === 'email' ? 'That email is already used by another account' : `That ${field} is already in use`
             });
         }
-        
-        res.status(500).json({ 
+
+        if (err.status && err.status < 500) {
+            return res.status(err.status).json({ success: false, message: err.message });
+        }
+
+        res.status(500).json({
             success: false,
             message: 'Server error updating user',
             error: process.env.NODE_ENV === 'development' ? err.message : undefined
@@ -344,93 +380,39 @@ export const toggleUserStatus = async (req, res) => {
 export const updateWalletBalance = async (req, res) => {
     try {
       const { id } = req.params;
-      const { amount, type, notes } = req.body;
-      
-      // Add debug logs
-      console.log(`[BALANCE UPDATE START] User: ${id}, Type: ${type}, Amount: ${amount}`);
-  
-      const parsedAmount = parseFloat(amount);
-      if (isNaN(parsedAmount) || parsedAmount <= 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'Valid positive numeric amount is required'
+      const { amount, type, notes } = req.body || {};
+      const parsedAmount = Math.round(Number(amount) * 100) / 100;
+      if (!['credit', 'debit'].includes(type)) {
+        return res.status(400).json({ success: false, message: 'type must be credit or debit' });
+      }
+      if (!Number.isFinite(parsedAmount) || parsedAmount <= 0 || parsedAmount > 1e12) {
+        return res.status(400).json({ success: false, message: 'Valid positive numeric amount is required' });
+      }
+      // Atomic: a debit can never take the balance below zero, even with concurrent requests.
+      const updatedUser = await withTransaction(async (session) => {
+        const u = type === 'credit'
+          ? await creditUser(id, parsedAmount, { session })
+          : await debitUser(id, parsedAmount, { session });
+        await recordTransaction({
+          userId: id, amount: parsedAmount, currency: u.currency,
+          type: type === 'credit' ? 'admin_credit' : 'admin_debit',
+          metadata: { note: String(notes || '').slice(0, 300), by: req.user?.id }, session, prefix: 'ADJ'
         });
-      }
-  
-      // Get current user FIRST
-      const currentUser = await User.findById(id);
-      if (!currentUser) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
-      }
-  
-      console.log(`[BEFORE] Balance: ${currentUser.balance}`);
-  
-      // Calculate new balance
-      let newBalance;
-      if (type === 'credit') {
-        newBalance = currentUser.balance + parsedAmount;
-      } else {
-        if (currentUser.balance < parsedAmount) {
-          return res.status(400).json({
-            success: false,
-            message: 'Insufficient funds'
-          });
-        }
-        newBalance = currentUser.balance - parsedAmount;
-      }
-  
-      // Update user DIRECTLY
-      const updatedUser = await User.findByIdAndUpdate(
-        id,
-        { $inc: { balance: type === 'credit' ? parsedAmount : -parsedAmount } },
-        { new: true, runValidators: true }
-      );
-      
-  
-      console.log(`[AFTER] Balance: ${updatedUser.balance}`);
-  
-      // Create transaction
-      const transactionType = type === 'credit' ? 'admin_credit' : 'admin_debit';
-      await Transaction.create({
-        userId: id,
-        amount: parsedAmount,
-        currency: updatedUser.currency,
-        type: transactionType,
-        status: 'completed',
-        reference: `ADJ-${Date.now()}`,
-        description: notes || `${type} adjustment by admin`
+        return u;
       });
-  
-      console.log(`[TRANSACTION CREATED] Amount: ${parsedAmount}`);
-  
-      res.json({
-        success: true,
-        user: transformUserForFrontend(updatedUser),
-        newBalance: newBalance
+      await notifyUser(id, {
+        type: 'transaction',
+        title: type === 'credit' ? 'Balance credited' : 'Balance debited',
+        content: `${type === 'credit' ? '+' : '-'}${parsedAmount} ${updatedUser.currency}${notes ? ` · ${String(notes).slice(0, 120)}` : ''}`,
+        link: '/transactionhistory'
       });
+      res.json({ success: true, user: transformUserForFrontend(updatedUser), newBalance: updatedUser.balance });
     } catch (err) {
-      console.error('Admin updateWalletBalance error:', err);
-      
-      if (err.message.includes('negative') || err.message.includes('Insufficient')) {
-        return res.status(400).json({
-          success: false,
-          message: 'Insufficient funds for debit operation'
-        });
-      }
-      
-      res.status(500).json({ 
-        success: false,
-        message: 'Server error updating wallet balance',
-        error: process.env.NODE_ENV === 'development' ? err.message : undefined
-      });
+      const status = err.status && err.status < 500 ? err.status : 500;
+      if (status === 500) console.error('Admin updateWalletBalance error:', err);
+      res.status(status).json({ success: false, message: status === 500 ? 'Server error updating wallet balance' : err.message });
     }
   };
-  
-
-
 
 export const resetUserPassword = async (req, res) => {
     try {
@@ -449,6 +431,10 @@ export const resetUserPassword = async (req, res) => {
                 success: false,
                 message: 'Both new password and confirmation are required'
             });
+        }
+
+        if (String(newPassword).length < 8) {
+            return res.status(400).json({ success: false, message: 'Password must be at least 8 characters' });
         }
 
         if (newPassword !== confirmPassword) {
@@ -520,7 +506,8 @@ export const generateAdminAccess = async (req, res) => {
       
       // Fetch frontendURL from settings
       const settings = await Setting.findOne().select('frontendURL');
-      let frontendURL = settings?.frontendURL || 'http://localhost:1200';
+      let frontendURL = process.env.FRONTEND_URL || settings?.frontendURL || 'http://localhost:1200';
+      if (/\/api(\/|$)/.test(frontendURL) && process.env.FRONTEND_URL) frontendURL = process.env.FRONTEND_URL;
       
       // Ensure frontendURL is a valid URL (basic validation)
       if (!frontendURL.startsWith('http://') && !frontendURL.startsWith('https://')) {
@@ -693,58 +680,13 @@ export const changeUserCurrency = async (req, res) => {
             });
         }
 
-        // 4. Get both currencies' rates relative to base (USD)
-        const oldCurrency = await Currency.findOne({ code: user.currency });
-        if (!oldCurrency) {
-            return res.status(400).json({
-                success: false,
-                message: 'Current user currency not found in system'
-            });
-        }
-
-        // 5. Calculate conversion rate (new/old)
-        // Since both are relative to USD, conversion is (newRate/oldRate)
-        const conversionRate = newCurrency.rate / oldCurrency.rate;
-        const newBalance = user.balance * conversionRate;
-
-        // 6. Update user with new currency and converted balance
-        const updatedUser = await User.findByIdAndUpdate(
-            userId,
-            { 
-                currency: newCurrencyCode,
-                balance: newBalance 
-            },
-            { new: true }
-        );
-
-        // 7. Create audit transaction
-        await Transaction.create({
-            userId: userId,
-            amount: user.balance,
-            newAmount: newBalance,
-            currency: user.currency,
-            newCurrency: newCurrencyCode,
-            type: 'currency_conversion',
-            status: 'completed',
-            reference: `CURRCONV-${Date.now()}`,
-            description: `Converted ${user.balance} ${user.currency} to ${newBalance} ${newCurrencyCode} at rate ${conversionRate}`,
-            metadata: {
-                oldRate: oldCurrency.rate,
-                newRate: newCurrency.rate,
-            }
-        });
-
+        // 4. Convert atomically at today's rate (and log it)
+        const r = await switchUserCurrency(userId, newCurrencyCode, { by: 'admin' });
         res.json({
             success: true,
-            user: transformUserForFrontend(updatedUser),
-            conversion: {
-                oldAmount: user.balance,
-                oldCurrency: user.currency,
-                newAmount: newBalance,
-                newCurrency: newCurrencyCode,
-                rate: conversionRate
-            },
-            message: `Currency changed from ${user.currency} to ${newCurrencyCode}`
+            user: transformUserForFrontend(r.user),
+            conversion: { oldAmount: r.oldBalance, oldCurrency: r.from, newAmount: r.newBalance, newCurrency: r.to, rate: r.rate },
+            message: `Currency changed from ${r.from} to ${r.to}`
         });
 
     } catch (err) {

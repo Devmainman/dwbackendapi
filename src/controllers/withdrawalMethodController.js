@@ -1,3 +1,5 @@
+import { safeRateBetween } from '../services/fx.js';
+import { round2 } from '../utils/money.js';
 import Currency from '../models/Currency.js';
 import WithdrawalMethod from '../models/WithdrawalMethod.js';
 import User from '../models/User.js';
@@ -85,11 +87,15 @@ export const getActiveWithdrawalMethods = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    const convertedMethods = methods.map(method => ({
-      ...method,
-      currency: userCurrency.code,
-      minAmount: parseFloat((method.minAmount * conversionRate).toFixed(2)),
-      maxAmount: parseFloat((method.maxAmount * conversionRate).toFixed(2)),
+    // Limits are stored in the method's own currency (falling back to the platform default).
+    const convertedMethods = await Promise.all(methods.map(async (method) => {
+      const r = method.currency ? await safeRateBetween(method.currency, userCurrency.code) : conversionRate;
+      return {
+        ...method,
+        currency: userCurrency.code,
+        minAmount: round2(method.minAmount * r),
+        maxAmount: round2(method.maxAmount * r)
+      };
     }));
 
     res.json({ success: true, data: convertedMethods });

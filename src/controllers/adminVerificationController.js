@@ -422,14 +422,17 @@ export const getVerificationCounts = async (req, res) => {
       }),
       User.countDocuments({ 'verification.identityVerified': true }),
       User.countDocuments({
-        'verification.proofOfAddress': { $exists: true, verified: false, rejected: false, processing: false }
+        'verification.proofOfAddress.image': { $exists: true, $nin: [null, ''] },
+        'verification.proofOfAddress.verified': { $ne: true },
+        'verification.proofOfAddress.rejected': { $ne: true },
+        'verification.proofOfAddress.processing': { $ne: true }
       }),
       User.countDocuments({ 'verification.addressVerified': true }),
       User.countDocuments({
         'verification.faceImage': { $exists: true, $ne: '' },
         'verification.faceVerified': false,
         'verification.faceVerificationStatus': { $ne: 'REJECTED' },
-        'verification.faceProcessing': false
+        'verification.faceProcessing': { $ne: true }
       }),
       User.countDocuments({ 'verification.faceVerified': true })
     ]);
@@ -437,7 +440,7 @@ export const getVerificationCounts = async (req, res) => {
     res.json({
       success: true,
       counts: {
-        idVerifications: { pending: idPending, idApproved: approved },
+        idVerifications: { pending: idPending, approved: idApproved },
         addressVerifications: { pending: addressPending, approved: addressApproved },
         facialVerifications: { pending: facePending, approved: faceApproved }
       }

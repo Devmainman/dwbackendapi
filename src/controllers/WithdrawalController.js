@@ -1,3 +1,4 @@
+import { creditUser } from '../utils/wallet.js';
 import mongoose from 'mongoose';
 import Withdrawal from '../models/Withdrawal.js';
 import WithdrawalMethod from '../models/WithdrawalMethod.js';
@@ -6,7 +7,8 @@ import WithdrawalToken from '../models/WithdrawalToken.js';
 import User from '../models/User.js';
 import { v4 as uuidv4 } from 'uuid';
 import { getUserThreshold } from '../utils/getUserThreshold.js';
-import { parseAmount } from '../utils/money.js';
+import { parseAmount, round2 } from '../utils/money.js';
+import { safeRateBetween, getBaseCurrency } from '../services/fx.js';
 import { notifyUser } from '../services/notificationService.js';
 
 
@@ -81,6 +83,12 @@ export const createWithdrawal = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Withdrawal method not available' });
     }
 
+    if (!method) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ success: false, message: 'Withdrawal method not available' });
+    }
+
     // 🚨 Check signal strength
     if ((user.tradingSignalStrength || 0) < (method.requiredSignal || 0)) {
       await session.abortTransaction();
@@ -91,19 +99,16 @@ export const createWithdrawal = async (req, res) => {
       });
     }
 
-    if (!method) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ success: false, message: 'Withdrawal method not available' });
-    }
-
-    // 💰 Validate amount
-    if (amount < method.minAmount || amount > method.maxAmount) {
+    // 💰 Validate amount against the method limits, converted into the user's currency
+    const limitRate = await safeRateBetween(method.currency || (await getBaseCurrency()), user.currency);
+    const minLimit = round2(method.minAmount * limitRate);
+    const maxLimit = round2(method.maxAmount * limitRate);
+    if (amount < minLimit || amount > maxLimit) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: `Amount must be between ${method.minAmount} and ${method.maxAmount}`
+        message: `Amount must be between ${minLimit} and ${maxLimit} ${user.currency}`
       });
     }
 
@@ -270,11 +275,7 @@ export const updateWithdrawalStatus = async (req, res) => {
 
     // Funds were debited when the request was created, so any rejection refunds exactly once.
     if (status === 'rejected') {
-      await User.findByIdAndUpdate(
-        withdrawal.user, 
-        { $inc: { balance: withdrawal.amount } },
-        { session }
-      );
+      await creditUser(withdrawal.user, withdrawal.amount, { session, currency: withdrawal.currency });
     }
 
     await session.commitTransaction();

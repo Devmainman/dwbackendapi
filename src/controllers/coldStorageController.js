@@ -3,6 +3,7 @@ import ColdStorageVault from '../models/ColdStorageVault.js';
 import User from '../models/User.js';
 import { parseAmount, parsePositiveInt, round2 } from '../utils/money.js';
 import { asString } from '../utils/validation.js';
+import { rateBetween } from '../services/fx.js';
 import { withTransaction, debitUser, creditUser, recordTransaction, convertFromBase, HttpError } from '../utils/wallet.js';
 import { handler, getSettings, loadActiveUser, addDays, addHours, notify, paging } from '../services/productService.js';
 
@@ -100,9 +101,9 @@ export const depositToVault = handler(async (req, res) => {
   const vault = await withTransaction(async (session) => {
     const v = await findOwnVault(user._id, req.params.id, session);
     if (v.status === 'closed') throw new HttpError(400, 'Vault is closed');
-    if (v.currency !== user.currency) throw new HttpError(400, 'Vault currency does not match your account currency');
     await debitUser(user._id, amount, { session });
-    v.amount = round2(v.amount + amount);
+    // The vault keeps the currency it was opened in; convert if the account has since changed.
+    v.amount = round2(v.amount + amount * (await rateBetween(user.currency, v.currency)));
     await v.save({ session });
     await recordTransaction({
       userId: user._id, amount, currency: user.currency, type: 'cold_storage',
@@ -174,7 +175,7 @@ export const releaseUnlocked = handler(async (req, res) => {
     v.unlockRequestedAt = null;
     v.unlockAvailableAt = null;
     await v.save({ session });
-    await creditUser(v.user, amount, { session });
+    await creditUser(v.user, amount, { session, currency: v.currency });
     await recordTransaction({
       userId: v.user, amount, currency: v.currency, type: 'cold_storage',
       metadata: { direction: 'out', vaultId: v._id, vaultName: v.name }, session, prefix: 'CS'

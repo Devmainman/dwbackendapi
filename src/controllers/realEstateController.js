@@ -168,7 +168,7 @@ export const claimIncome = handler(async (req, res) => {
     if (!(e.unclaimed >= 0.01)) throw new HttpError(400, 'No returns to collect yet');
     inv.incomeClaimed = round2(inv.incomeClaimed + e.unclaimed);
     await inv.save({ session });
-    await creditUser(inv.user, e.unclaimed, { session });
+    await creditUser(inv.user, e.unclaimed, { session, currency: inv.currency });
     await recordTransaction({
       userId: inv.user, amount: e.unclaimed, currency: inv.currency, type: 'real_estate',
       metadata: { action: 'income', investmentId: inv._id }, session, prefix: 'RE'
@@ -191,7 +191,7 @@ export const redeem = handler(async (req, res) => {
     inv.redeemedAt = new Date();
     inv.payout = total;
     await inv.save({ session });
-    await creditUser(inv.user, total, { session });
+    await creditUser(inv.user, total, { session, currency: inv.currency });
     await recordTransaction({
       userId: inv.user, amount: total, currency: inv.currency, type: 'real_estate',
       metadata: { action: 'redeem', investmentId: inv._id }, session, prefix: 'RE'

@@ -25,7 +25,7 @@ const marketPositionSchema = new mongoose.Schema({
   pnl: { type: Number, default: 0 },
   pnlPercent: { type: Number, default: 0 },
   payout: { type: Number, default: 0 },
-  closeReason: { type: String, enum: ['manual', 'take_profit', 'stop_loss', 'liquidated', null], default: null },
+  closeReason: { type: String, enum: ['manual', 'take_profit', 'stop_loss', 'liquidated', 'admin', null], default: null },
   openedAt: { type: Date, default: Date.now },
   closedAt: { type: Date }
 }, { timestamps: true });

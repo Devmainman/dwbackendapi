@@ -43,6 +43,28 @@ const generateToken = (user) => {
   );
 };
 
+/**
+ * POST /api/users/refresh — swap a valid (or recently expired, < 7 days) token for a fresh one.
+ * Admin "login as user" tokens are never extended.
+ */
+export const refreshSession = async (req, res) => {
+  try {
+    const raw = String(req.header('Authorization') || '').replace(/^Bearer\s+/i, '');
+    if (!raw) return res.status(401).json({ success: false, message: 'No token' });
+    const decoded = jwt.verify(raw, process.env.JWT_SECRET, { algorithms: ['HS256'], ignoreExpiration: true });
+    if (decoded.isAdminAccess || decoded.isAdmin) return res.status(401).json({ success: false, message: 'Session cannot be extended' });
+    if (decoded.exp && Date.now() - decoded.exp * 1000 > 7 * 24 * 3600e3) return res.status(401).json({ success: false, message: 'Session expired, please sign in again' });
+    const userId = decoded.user?.id || decoded.id;
+    const user = await User.findById(userId).select('status').lean();
+    if (!user || ['Blocked', 'Suspended', 'blocked', 'suspended'].includes(user.status)) {
+      return res.status(401).json({ success: false, message: 'Account unavailable' });
+    }
+    res.json({ success: true, token: generateToken({ _id: userId }) });
+  } catch {
+    res.status(401).json({ success: false, message: 'Invalid session' });
+  }
+};
+
 export const signup = async (req, res) => {
   const { email, password, referralCode } = req.body;
 

@@ -10,10 +10,11 @@ import MiningReward from '../models/MiningReward.js';
 import MiningPool from '../models/MiningPool.js';
 import MiningBooster from '../models/MiningBooster.js';
 import { round2 } from '../utils/money.js';
+import { rateBetween } from '../services/fx.js';
 import { withTransaction, debitUser, creditUser, recordTransaction, convertFromBase, HttpError } from '../utils/wallet.js';
 import { handler, loadActiveUser } from '../services/productService.js';
 import {
-  EQUIPMENT_CATALOG, BOOSTER_CATALOG, MAX_SESSION_HOURS, ensureDefaultPools,
+  getCatalog as loadCatalog, MAX_SESSION_HOURS, ensureDefaultPools,
   machineDailyYield, sessionEarnings, finishSession
 } from '../services/miningEngine.js';
 
@@ -23,16 +24,17 @@ const err = (status, message) => new HttpError(status, message);
 export const getCatalog = handler(async (req, res) => {
   const user = await User.findById(req.user.id).select('currency balance').lean();
   const { rate } = await convertFromBase(1, user.currency);
+  const { equipment: EQUIPMENT, boosters: BOOSTERS } = await loadCatalog();
   res.json({
     success: true,
     currency: user.currency,
     balance: user.balance,
     maxSessionHours: MAX_SESSION_HOURS,
-    equipment: Object.entries(EQUIPMENT_CATALOG).map(([id, t]) => ({
+    equipment: Object.entries(EQUIPMENT).map(([id, t]) => ({
       id, name: t.name, type: t.type, hashRate: t.hashRate, powerConsumption: t.powerConsumption,
       price: round2(t.price * rate), dailyYieldPercent: t.dailyYieldPercent, dailyEarnings: round2(t.price * rate * (t.dailyYieldPercent / 100))
     })),
-    boosters: Object.entries(BOOSTER_CATALOG).map(([id, b]) => ({
+    boosters: Object.entries(BOOSTERS).map(([id, b]) => ({
       id, name: b.name, type: b.type, multiplier: b.multiplier, duration: b.duration, description: b.description, price: round2(b.price * rate)
     }))
   });
@@ -184,7 +186,7 @@ export const getEquipment = handler(async (req, res) => {
 
 /** POST /api/mining/purchase-equipment  { equipmentId } */
 export const purchaseEquipment = handler(async (req, res) => {
-  const tpl = EQUIPMENT_CATALOG[req.body.equipmentId];
+  const tpl = (await loadCatalog()).equipment[req.body.equipmentId];
   if (!tpl) throw err(404, 'Machine not found');
   const user = await loadActiveUser(req.user.id);
   const { amount: price } = await convertFromBase(tpl.price, user.currency);
@@ -241,10 +243,17 @@ export const claimRewards = handler(async (req, res) => {
     );
     if (!marked.modifiedCount) throw err(400, 'No rewards to claim yet');
     const claimed = await MiningReward.find({ userId: req.user.id, 'metadata.claimId': claimId }).session(s).lean();
-    const sum = round2(claimed.reduce((acc, r) => acc + (r.value || 0), 0));
+    // Rewards are stored in the currency the session ran in; convert each into today's account currency.
+    const holder = await User.findById(req.user.id).select('currency').session(s).lean();
+    let sum = 0;
+    for (const r of claimed) {
+      // eslint-disable-next-line no-await-in-loop
+      sum += (r.value || 0) * (await rateBetween(r.metadata?.currency || holder.currency, holder.currency));
+    }
+    sum = round2(sum);
     if (sum > 0) {
       await creditUser(req.user.id, sum, { session: s });
-      await recordTransaction({ userId: req.user.id, amount: sum, currency: claimed[0]?.metadata?.currency, type: 'mining', metadata: { action: 'claim_rewards', count: claimed.length, claimId }, session: s, prefix: 'MIN' });
+      await recordTransaction({ userId: req.user.id, amount: sum, currency: holder.currency, type: 'mining', metadata: { action: 'claim_rewards', count: claimed.length, claimId }, session: s, prefix: 'MIN' });
     }
     return { sum, count: claimed.length };
   });
@@ -264,7 +273,7 @@ export const getBoosters = handler(async (req, res) => {
 
 /** POST /api/mining/activate-booster  { boosterId } */
 export const activateBooster = handler(async (req, res) => {
-  const tpl = BOOSTER_CATALOG[req.body.boosterId];
+  const tpl = (await loadCatalog()).boosters[req.body.boosterId];
   if (!tpl) throw err(404, 'Booster not found');
   const user = await loadActiveUser(req.user.id);
   const { amount: price } = await convertFromBase(tpl.price, user.currency);

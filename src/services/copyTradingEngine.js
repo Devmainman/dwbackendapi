@@ -407,7 +407,7 @@ export const stopCopy = async (copyId, { userId, reason = 'user' } = {}) => {
     c.stopReason = reason;
     await c.save({ session });
     if (amount > 0) {
-      await creditUser(c.userId, amount, { session });
+      await creditUser(c.userId, amount, { session, currency: c.currency });
       await recordTransaction({
         userId: c.userId, amount, currency: c.currency, type: 'copy_trade',
         metadata: { action: 'payout', trader: c.traderUsername, copyTradeId: c._id, reason }, session, prefix: 'CPY'

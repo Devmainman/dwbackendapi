@@ -1,196 +1,77 @@
+import mongoose from 'mongoose';
 import Transaction from '../models/Transaction.js';
 import Deposit from '../models/Deposit.js';
-import Withdrawal from '../models/Withdrawal.js'; // Ensure you have a Withdrawal model
-import User from '../models/User.js';
-import { v4 as uuidv4 } from 'uuid';
+import Withdrawal from '../models/Withdrawal.js';
+import { escapeRegex } from '../utils/validation.js';
 
+// Money coming in to the user's balance (everything else is money going out or moving).
+const INFLOW = new Set(['deposit', 'admin_credit', 'referral_bonus']);
+const describe = (t) => {
+  const action = String(t.metadata?.action || '').replace(/_/g, ' ');
+  const base = String(t.type || '').replace(/_/g, ' ');
+  return action ? `${base} · ${action}` : base;
+};
+
+/**
+ * GET /api/account/transactions?page=&limit=&search=&type=
+ * Every ledger entry for the user (deposits, withdrawals, trades, staking,
+ * real estate, stocks, mining, cards, vaults, copy trading, admin adjustments
+ * and currency conversions), newest first, with real pagination.
+ */
 export const getTransactions = async (req, res) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
-    const skip = (page - 1) * limit;
-    const userId = req.user.id;
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 10));
+    const userId = new mongoose.Types.ObjectId(String(req.user.id));
+    const query = { userId };
+    if (typeof req.query.type === 'string' && req.query.type) query.type = req.query.type;
+    const search = typeof req.query.search === 'string' ? req.query.search.trim().slice(0, 60) : '';
+    if (search) {
+      const re = new RegExp(escapeRegex(search), 'i');
+      query.$or = [{ reference: re }, { type: re }, { status: re }, { 'metadata.action': re }];
+    }
 
-    // Fetch deposits, withdrawals, admin credits, and referral bonuses separately
-    const [
-        deposits,
-        withdrawals,
-        adminCredits,
-        referralBonuses,
-        upgradeTransactions,
-        totalDeposits,
-        totalWithdrawals,
-        totalAdminCredits,
-        totalReferralBonuses,
-        totalUpgradeTransactions // ← Add this
-      ] = await Promise.all([
-        Deposit.find({ userId }).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-        Withdrawal.find({ user: userId }).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-        Transaction.find({ userId, type: 'admin_credit', status: 'completed' }).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-        Transaction.find({ userId, type: 'referral_bonus', status: 'completed' }).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-        Transaction.find({ userId, type: 'upgrade' }).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-        Deposit.countDocuments({ userId }),
-        Withdrawal.countDocuments({ user: userId }),
-        Transaction.countDocuments({ userId, type: 'admin_credit', status: 'completed' }),
-        Transaction.countDocuments({ userId, type: 'referral_bonus', status: 'completed' }),
-        Transaction.countDocuments({ userId, type: 'upgrade' }) // 👈 Here
-      ]);
+    const [rows, total] = await Promise.all([
+      Transaction.find(query).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      Transaction.countDocuments(query)
+    ]);
 
-    // Combine and format transactions
-    const combinedTransactions = [
-      ...deposits.map(d => ({
-        id: d._id,
-        type: 'deposit',
-        amount: d.amount,
-        currency: d.currency,
-        status: d.status,
-        reference: d.transactionReference,
-        createdAt: d.createdAt
-      })),
-      ...withdrawals.map(w => ({
-        id: w._id,
-        type: 'withdrawal',
-        amount: w.amount,
-        currency: w.currency,
-        status: w.status,
-        reference: w._id.toString(),
-        createdAt: w.createdAt
-      })),
-      ...adminCredits.map(ac => ({
-        id: ac._id,
-        type: 'deposit', // Keep admin_credit shown as deposit
-        amount: ac.amount,
-        currency: ac.currency,
-        status: ac.status,
-        reference: ac.reference || `ADMIN-CREDIT-${ac._id.toString().slice(-6)}`,
-        createdAt: ac.createdAt,
-        isAdminCredit: true
-      })),
-      ...referralBonuses.map(rb => ({
-        id: rb._id,
-        type: 'Referral Bonus', // Show referral_bonus with its own type
-        amount: rb.amount,
-        currency: rb.currency,
-        status: rb.status,
-        reference: rb.reference || `REF-BONUS-${rb._id.toString().slice(-6)}`,
-        createdAt: rb.createdAt
-      })),
-      ...upgradeTransactions.map(upg => ({
-        id: upg._id,
-        type: 'Account Upgrade',
-        amount: upg.amount,
-        currency: upg.currency,
-        status: upg.status,
-        reference: upg.reference || `UPGRADE-${upg._id.toString().slice(-6)}`,
-        createdAt: upg.createdAt
-      }))
-    ].sort((a, b) => b.createdAt - a.createdAt);
+    // Bank details for deposits / withdrawals, looked up by reference.
+    const refs = rows.map((t) => t.reference).filter(Boolean);
+    const [deps, wds] = await Promise.all([
+      Deposit.find({ transactionReference: { $in: refs } }).select('transactionReference paymentMethod paymentMethodId').lean(),
+      Withdrawal.find({ transactionReference: { $in: refs } }).select('transactionReference bankName accountName accountNumber method').lean()
+    ]);
+    const byRef = new Map([...deps, ...wds].map((d) => [d.transactionReference, d]));
 
-    const total = totalDeposits + totalWithdrawals + totalAdminCredits + totalReferralBonuses + totalUpgradeTransactions;
+    const transactions = rows.map((t) => {
+      const extra = byRef.get(t.reference) || {};
+      return {
+        id: t._id,
+        type: t.type,
+        label: describe(t),
+        direction: INFLOW.has(t.type) ? 'in' : 'out',
+        amount: t.amount,
+        currency: t.currency,
+        status: t.status,
+        reference: t.reference,
+        bankName: extra.bankName || extra.paymentMethod || '',
+        accountName: extra.accountName || '',
+        accountNumber: extra.accountNumber || '',
+        metadata: t.metadata || {},
+        createdAt: t.createdAt
+      };
+    });
 
     res.json({
       success: true,
       data: {
-        transactions: combinedTransactions,
-        pagination: {
-          total,
-          pages: Math.ceil(total / limit),
-          currentPage: parseInt(page),
-          limit: parseInt(limit)
-        }
+        transactions,
+        pagination: { total, pages: Math.ceil(total / limit), currentPage: page, limit }
       }
     });
   } catch (err) {
-    console.error('Get transactions error:', {
-      error: err.message,
-      userId: req.user.id,
-      query: req.query
-    });
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch transactions'
-    });
+    console.error('getTransactions error:', err);
+    res.status(500).json({ success: false, message: 'Could not load transactions' });
   }
 };
-
-
-// createDeposit removed: it credited balances without payment verification.
-
-
-  export const getAllTransactions = async (req, res) => {
-    try {
-      const { page = 1, limit = 20, type, status, userId } = req.query;
-      
-      const query = {};
-      if (type) query.type = type;
-      if (status) query.status = status;
-      if (userId) query.userId = userId;
-      
-      const transactions = await Transaction.find(query)
-        .populate('userId', 'fullName accountId email')
-        .sort({ createdAt: -1 })
-        .skip((page - 1) * limit)
-        .limit(limit);
-      
-      const total = await Transaction.countDocuments(query);
-      
-      res.json({
-        success: true,
-        transactions,
-        total,
-        page: Number(page),
-        pages: Math.ceil(total / limit)
-      });
-    } catch (err) {
-      console.error('Get all transactions error:', err);
-      res.status(500).json({
-        success: false,
-        message: 'Server error fetching transactions'
-      });
-    }
-  };
-  
-  export const updateTransactionStatus = async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { status } = req.body;
-      
-      if (!['pending', 'completed', 'failed', 'cancelled'].includes(status)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid transaction status'
-        });
-      }
-      
-      const transaction = await Transaction.findByIdAndUpdate(
-        id,
-        { status },
-        { new: true }
-      ).populate('userId', 'fullName accountId');
-      
-      if (!transaction) {
-        return res.status(404).json({
-          success: false,
-          message: 'Transaction not found'
-        });
-      }
-      
-      // If completing a deposit, update user balance
-      if (status === 'completed' && transaction.type === 'deposit') {
-        await User.findByIdAndUpdate(
-          transaction.userId,
-          { $inc: { walletBalance: transaction.amount } }
-        );
-      }
-      
-      res.json({
-        success: true,
-        transaction
-      });
-    } catch (err) {
-      console.error('Update transaction error:', err);
-      res.status(500).json({
-        success: false,
-        message: 'Server error updating transaction'
-      });
-    }
-  };

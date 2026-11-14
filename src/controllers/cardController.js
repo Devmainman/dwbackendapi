@@ -4,6 +4,7 @@ import Card from '../models/Card.js';
 import User from '../models/User.js';
 import { parseAmount, round2 } from '../utils/money.js';
 import { asString } from '../utils/validation.js';
+import { rateBetween } from '../services/fx.js';
 import { withTransaction, debitUser, creditUser, recordTransaction, convertFromBase, HttpError } from '../utils/wallet.js';
 import { handler, getSettings, loadActiveUser, notify, paging } from '../services/productService.js';
 
@@ -107,7 +108,8 @@ export const fundCard = handler(async (req, res) => {
     const c = await ownCard(user._id, req.params.id, session);
     if (c.status !== 'active') throw new HttpError(400, 'Only active cards can be funded');
     await debitUser(user._id, amount, { session });
-    c.balance = round2(c.balance + amount);
+    // The card keeps the currency it was issued in; convert if the account has since changed.
+    c.balance = round2(c.balance + amount * (await rateBetween(user.currency, c.currency)));
     await c.save({ session });
     await recordTransaction({
       userId: user._id, amount, currency: c.currency, type: 'card',
@@ -130,7 +132,7 @@ export const unloadCard = handler(async (req, res) => {
       { new: true, session }
     );
     if (!c) throw new HttpError(400, 'Insufficient card balance');
-    await creditUser(req.user.id, amount, { session });
+    await creditUser(req.user.id, amount, { session, currency: c.currency });
     await recordTransaction({
       userId: req.user.id, amount, currency: c.currency, type: 'card',
       metadata: { action: 'unload', cardId: c._id, last4: c.last4 }, session, prefix: 'CRD'
@@ -176,7 +178,7 @@ export const cancelCard = handler(async (req, res) => {
     c.cancelledAt = new Date();
     await c.save({ session });
     if (balance > 0) {
-      await creditUser(c.user, balance, { session });
+      await creditUser(c.user, balance, { session, currency: c.currency });
       await recordTransaction({
         userId: c.user, amount: balance, currency: c.currency, type: 'card',
         metadata: { action: 'cancel_refund', cardId: c._id }, session, prefix: 'CRD'
@@ -232,7 +234,7 @@ export const adminRejectCard = handler(async (req, res) => {
     c.adminNote = asString(req.body.reason, 500);
     await c.save({ session });
     if (c.issuanceFee > 0) {
-      await creditUser(c.user, c.issuanceFee, { session });
+      await creditUser(c.user, c.issuanceFee, { session, currency: c.currency });
       await recordTransaction({
         userId: c.user, amount: c.issuanceFee, currency: c.currency, type: 'card',
         metadata: { action: 'fee_refund', cardId: c._id }, session, prefix: 'CRD'

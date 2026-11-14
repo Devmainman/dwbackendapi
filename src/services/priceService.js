@@ -1,7 +1,7 @@
 // USD prices for crypto assets, from Binance's public ticker with a short cache.
 // Falls back to an admin-set price when an asset isn't listed or the API is unreachable.
 import axios from 'axios';
-import Currency from '../models/Currency.js';
+import { safeRateBetween } from './fx.js';
 import { round2 } from '../utils/money.js';
 
 const STABLE = new Set(['USD', 'USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'FDUSD']);
@@ -37,14 +37,8 @@ export const getUsdPrices = async (assets, fallbacks = {}) => {
   return out;
 };
 
-/** Convert a USD amount into the user's currency using the admin-managed currency rates. */
+/** Convert a USD amount into the user's currency using the shared FX table. */
 export const usdToCurrency = async (usd, currency) => {
-  const code = String(currency || 'USD').toUpperCase();
-  if (code === 'USD') return { amount: round2(usd), rate: 1 };
-  const [usdRow, target] = await Promise.all([
-    Currency.findOne({ code: 'USD' }).select('rate').lean(),
-    Currency.findOne({ code }).select('rate').lean()
-  ]);
-  const rate = (target?.rate || 1) / (usdRow?.rate || 1);
+  const rate = await safeRateBetween("USD", currency || "USD");
   return { amount: round2(usd * rate), rate };
 };

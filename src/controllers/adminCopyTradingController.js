@@ -460,3 +460,69 @@ export const recomputeStats = handler(async (req, res) => {
   await recomputeTraderStats(trader.traderId);
   res.json({ success: true, trader: await Trader.findById(trader._id) });
 });
+
+// ------------------------------------------------------------ analytics & exports
+
+const csvCell = (v) => {
+  const s = v === null || v === undefined ? '' : v instanceof Date ? v.toISOString() : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+const sendCsv = (res, name, header, rows) => {
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+  res.send([header, ...rows].map((r) => r.map(csvCell).join(',')).join('\n'));
+};
+
+/** GET /traders/:traderId/analytics — win/loss breakdown of the trader's closed trades (in %) */
+export const getTraderAnalytics = handler(async (req, res) => {
+  const trader = await findTrader(req.params.traderId);
+  const closed = await MasterTrade.find({ traderId: trader.traderId, status: 'closed' }).sort({ closedAt: 1 }).select('pnlPercent closedAt').lean();
+  const wins = closed.filter((t) => t.pnlPercent > 0);
+  const losses = closed.filter((t) => t.pnlPercent < 0);
+  let run = 0; let bestWin = 0; let bestLoss = 0;
+  for (const t of closed) {
+    if (t.pnlPercent > 0) run = run > 0 ? run + 1 : 1;
+    else if (t.pnlPercent < 0) run = run < 0 ? run - 1 : -1;
+    bestWin = Math.max(bestWin, run);
+    bestLoss = Math.min(bestLoss, run);
+  }
+  const sum = (a) => a.reduce((s, t) => s + t.pnlPercent, 0);
+  res.json({
+    success: true,
+    stats: {
+      unit: 'percent',
+      totalTrades: closed.length,
+      winningTrades: wins.length,
+      losingTrades: losses.length,
+      totalProfit: round2(sum(wins)),
+      totalLoss: round2(Math.abs(sum(losses))),
+      averageWin: wins.length ? round2(sum(wins) / wins.length) : 0,
+      averageLoss: losses.length ? round2(Math.abs(sum(losses)) / losses.length) : 0,
+      largestWin: wins.length ? round2(Math.max(...wins.map((t) => t.pnlPercent))) : 0,
+      largestLoss: losses.length ? round2(Math.abs(Math.min(...losses.map((t) => t.pnlPercent)))) : 0,
+      consecutiveWins: bestWin,
+      consecutiveLosses: Math.abs(bestLoss)
+    }
+  });
+});
+
+/** GET /export — all traders as CSV */
+export const exportTraders = handler(async (_req, res) => {
+  const traders = await Trader.find({}).sort({ createdAt: -1 }).lean();
+  sendCsv(res, 'traders.csv',
+    ['traderId', 'username', 'fullName', 'email', 'active', 'verified', 'level', 'followers', 'minCopyAmount', 'commission%', 'createdAt'],
+    traders.map((t) => [t.traderId, t.username, t.fullName, t.email, t.isActive, t.verified, t.verificationLevel, t.followers ?? t.stats?.followers, t.settings?.minCopyAmount, t.settings?.commissionRate ?? t.commissionRate, t.createdAt]));
+});
+
+/** GET /copied-trades/admin/export?format=csv|json — every copy relationship */
+export const exportCopies = handler(async (req, res) => {
+  const copies = await CopyTrade.find({}).sort({ startedAt: -1 }).populate('userId', 'email').lean();
+  const rows = copies.map((c) => ({
+    id: c._id, user: c.userId?.email, trader: c.traderUsername, status: c.status, currency: c.currency,
+    amount: c.amount, cash: c.cash, realizedPnl: c.realizedPnl, commissionPaid: c.commissionPaid, payout: c.payout,
+    startedAt: c.startedAt, stoppedAt: c.stoppedAt, stopReason: c.stopReason
+  }));
+  if (req.query.format === 'json') return res.json({ success: true, copies: rows });
+  const keys = Object.keys(rows[0] || { id: 0 });
+  return sendCsv(res, 'copies.csv', keys, rows.map((r) => keys.map((k) => r[k])));
+});

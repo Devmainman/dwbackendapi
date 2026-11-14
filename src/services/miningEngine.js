@@ -4,6 +4,7 @@
 //   The pool fee is deducted. Sessions run for at most MAX_SESSION_HOURS, then stop on their own.
 // All values are kept in the user's currency (prices below are in the platform base currency).
 import MiningPool from '../models/MiningPool.js';
+import Setting from '../models/Setting.js';
 import MiningSession from '../models/MiningSession.js';
 import MiningBooster from '../models/MiningBooster.js';
 import MiningReward from '../models/MiningReward.js';
@@ -29,6 +30,24 @@ export const BOOSTER_CATALOG = {
   double_rewards: { name: 'Double Rewards', type: 'rewards', multiplier: 2, duration: 1800, price: 25, description: '2× earnings for 30 minutes' }
 };
 
+/**
+ * Catalog with the admin's overrides applied (Settings.miningCatalog):
+ *   { equipment: { gpu_1: { price, dailyYieldPercent, enabled } }, boosters: { hash_boost: { price, multiplier, duration, enabled } } }
+ * Disabled items are left out of the shop but existing machines keep earning.
+ */
+let catalogCache = null;
+export const invalidateCatalog = () => { catalogCache = null; };
+export const getCatalog = async ({ includeDisabled = false } = {}) => {
+  if (!catalogCache || Date.now() - catalogCache.at > 30e3) {
+    const s = await Setting.findOne().select('miningCatalog').lean();
+    const o = s?.miningCatalog || {};
+    const merge = (base, over) => Object.fromEntries(Object.entries(base).map(([id, t]) => [id, { ...t, enabled: true, ...(over?.[id] || {}) }]));
+    catalogCache = { at: Date.now(), equipment: merge(EQUIPMENT_CATALOG, o.equipment), boosters: merge(BOOSTER_CATALOG, o.boosters) };
+  }
+  const pick = (m) => (includeDisabled ? m : Object.fromEntries(Object.entries(m).filter(([, t]) => t.enabled !== false)));
+  return { equipment: pick(catalogCache.equipment), boosters: pick(catalogCache.boosters) };
+};
+
 const DEFAULT_POOLS = [
   { name: 'Atlas BTC Pool', url: 'stratum+tcp://btc.atlaspool.example:3333', fee: 1.5, minPayout: 0.001, algorithm: 'SHA-256', supportedCoins: ['BTC'], paymentMethod: 'PPS', location: 'Global', status: 'active' },
   { name: 'Nova ETC Pool', url: 'stratum+tcp://etc.novapool.example:4444', fee: 1, minPayout: 0.05, algorithm: 'Ethash', supportedCoins: ['ETC'], paymentMethod: 'PPLNS', location: 'EU', status: 'active' },
@@ -43,7 +62,8 @@ export const ensureDefaultPools = async () => {
 /** Daily earnings of one machine in the user's currency. */
 export const machineDailyYield = async (eq, currency) => {
   if (eq.metadata?.dailyYield && eq.metadata?.currency === currency) return eq.metadata.dailyYield;
-  const tpl = Object.values(EQUIPMENT_CATALOG).find((t) => t.name === eq.name);
+  const { equipment: cat } = await getCatalog({ includeDisabled: true });
+  const tpl = Object.values(cat).find((t) => t.name === eq.name);
   const pct = tpl?.dailyYieldPercent ?? 0.3;
   if (eq.metadata?.priceLocal) return round2(eq.metadata.priceLocal * (pct / 100));
   const { amount } = await convertFromBase(eq.purchasePrice || tpl?.price || 0, currency);

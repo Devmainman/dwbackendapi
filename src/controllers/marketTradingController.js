@@ -132,7 +132,7 @@ export const closeAt = async (positionId, price, reason) => {
     p.closedAt = new Date();
     await p.save({ session });
     if (payout > 0) {
-      await creditUser(p.user, payout, { session });
+      await creditUser(p.user, payout, { session, currency: p.currency });
     }
     await recordTransaction({
       userId: p.user, amount: payout, currency: p.currency, type: 'trade',
@@ -140,7 +140,7 @@ export const closeAt = async (positionId, price, reason) => {
     });
     return p;
   });
-  if (result && reason !== 'manual') {
+  if (result && ['take_profit', 'stop_loss', 'liquidated'].includes(reason)) {
     const label = { take_profit: 'Take profit hit', stop_loss: 'Stop loss hit', liquidated: 'Position liquidated' }[reason];
     await notifyUser(result.user, {
       type: 'trading',
@@ -262,14 +262,14 @@ export const startStopMonitor = () => {
  */
 export const migrateLegacySimTrades = async () => {
   const SimulatedTrade = (await import('../models/SimulatedTrade.js')).default;
-  const open = await SimulatedTrade.find({ status: 'open' }).select('_id user amount').lean();
+  const open = await SimulatedTrade.find({ status: 'open' }).select('_id user amount currency').lean();
   let n = 0;
   for (const t of open) {
     // eslint-disable-next-line no-await-in-loop
     await withTransaction(async (session) => {
       const r = await SimulatedTrade.updateOne({ _id: t._id, status: 'open' }, { $set: { status: 'closed', closedAt: new Date(), 'metadata.refunded': true } }, { session });
       if (r.modifiedCount !== 1 || !(t.amount > 0)) return;
-      await creditUser(t.user, t.amount, { session });
+      await creditUser(t.user, t.amount, { session, currency: t.currency });
       await recordTransaction({ userId: t.user, amount: t.amount, currency: undefined, type: 'trade', metadata: { action: 'legacy_refund', simulatedTradeId: t._id }, session, prefix: 'MKT' });
       n += 1;
     }).catch((err) => console.error('Legacy sim refund failed:', err.message));
