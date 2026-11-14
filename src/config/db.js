@@ -11,9 +11,9 @@ const connectDB = async () => {
       socketTimeoutMS: 45000,          // Close sockets after 45s of inactivity
     });
 
-    console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
+    console.log(`MongoDB Connected: ${conn.connection.host}`);
   } catch (err) {
-    console.error(`❌ MongoDB Connection Error: ${err.message}`);
+    console.error(`MongoDB Connection Error: ${err.message}`);
     process.exit(1);
   }
 };

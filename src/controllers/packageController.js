@@ -180,7 +180,7 @@ export const getUserPackages = async (req, res) => {
     // Fetch only active packages excluding "Basic"
     let packages = await Package.find({
       status: 'Active',
-      name: { $ne: 'Basic' }  // 🚫 exclude Basic
+      name: { $ne: 'Basic' }  // exclude Basic
     }).sort({ amount: 1 }).lean();
 
     // Remove user's current package

@@ -883,7 +883,7 @@ export const sendMessageToUser = async (req, res) => {
             });
         }
 
-        // ✅ Create and save to Message model
+        // Create and save to Message model
         const newMessage = new Message({
             sender: req.user.id,
             recipient: user._id,
@@ -895,8 +895,8 @@ export const sendMessageToUser = async (req, res) => {
 
         await newMessage.save();
 
-        // ✅ Optional: you may skip pushing into user.messages[] if using Message model consistently
-        // user.messages.push(...); // ❌ This is redundant unless you're using it elsewhere
+        // Optional: you may skip pushing into user.messages[] if using Message model consistently
+        // user.messages.push(...); // This is redundant unless you're using it elsewhere
 
         // In-app notification (stored + pushed live over the WebSocket).
         await notifyUser(user._id, {
@@ -912,7 +912,7 @@ export const sendMessageToUser = async (req, res) => {
             }
         });
 
-        // ✅ Send email if selected
+        // Send email if selected
         if (sendEmail) {
             await sendEmailToUser(user.email, subject, message);
         }

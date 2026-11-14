@@ -177,7 +177,7 @@ export const processReferral = async (referrerCode, newUserId) => {
     // Link the new user to the referrer
     newUser.referral.referredBy = referrer._id;
 
-    // 🟡 Fetch referral bonus amount from global settings
+    // Fetch referral bonus amount from global settings
     const settings = await Setting.findOne().session(session);
     const referralBonus = settings?.referralCommission || 0.1;
 
@@ -253,16 +253,16 @@ export const awardReferralBonus = async (referrerId, defaultBonusAmount) => {
       throw new Error('Currency setup missing');
     }
 
-    // 🔁 Convert default bonus to user currency
+    // Convert default bonus to user currency
     const convertedBonus = parseFloat(((defaultBonusAmount / defaultCurrency.rate) * userCurrency.rate).toFixed(2));
 
-    // 💰 Credit user's balance and update referral earnings
+    // Credit user's balance and update referral earnings
     user.balance += convertedBonus;
     user.referral.totalEarned = (user.referral.totalEarned || 0) + defaultBonusAmount;
 
     await user.save();
 
-    // 🧾 Record transaction
+    // Record transaction
     await Transaction.create({
       userId: user._id,
       amount: convertedBonus,

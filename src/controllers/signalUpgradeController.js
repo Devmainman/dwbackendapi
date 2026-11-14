@@ -38,11 +38,11 @@ export const createSignalUpgrade = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Signal package not found or inactive' });
     }
 
-    // 🔥 GET DEFAULT CURRENCY FROM SETTINGS
+    // GET DEFAULT CURRENCY FROM SETTINGS
     const setting = await Setting.findOne();
     const currency = setting?.defaultCurrency;
 
-    /* 🔥 SAVE PAYMENT PROOF FILE */
+    /* SAVE PAYMENT PROOF FILE */
     const allowed = ['.jpg', '.jpeg', '.png', '.webp', '.pdf'];
     const ext = path.extname(String(paymentProof.name || '')).toLowerCase();
     if (!allowed.includes(ext)) {
@@ -58,7 +58,7 @@ export const createSignalUpgrade = async (req, res) => {
 
     await paymentProof.mv(filePath);
 
-    /* 🔥 CREATE INVOICE AFTER PAYMENT */
+    /* CREATE INVOICE AFTER PAYMENT */
     const invoice = new SignalInvoice({
       user: user._id,
 
@@ -88,7 +88,7 @@ export const createSignalUpgrade = async (req, res) => {
 
     await invoice.save();
 
-    // 🔥 CREATE TRANSACTION RECORD
+    // CREATE TRANSACTION RECORD
 const transaction = new Transaction({
   userId: user._id,
   amount: pkg.amount,
@@ -134,7 +134,7 @@ export const approveSignalUpgrade = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Signal invoice not found' });
     }
 
-    // ✅ CORRECT STATUS CHECK
+    // CORRECT STATUS CHECK
     if (invoice.status !== 'pending') {
       return res.status(400).json({
         success: false,
@@ -153,7 +153,7 @@ export const approveSignalUpgrade = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Signal package missing' });
     }
 
-    // 🔥 ACTIVATE INVOICE
+    // ACTIVATE INVOICE
     invoice.status = 'active';
     invoice.signalStatus = 'delivering';
     invoice.lastSignal = new Date();
@@ -163,7 +163,7 @@ export const approveSignalUpgrade = async (req, res) => {
 
     await invoice.save();
 
-  // 🔥 INCREASE USER SIGNAL STRENGTH (ADD, NOT REPLACE)
+  // INCREASE USER SIGNAL STRENGTH (ADD, NOT REPLACE)
 user.tradingSignalStrength =
   (user.tradingSignalStrength || 0) + (pkg.strength || 0);
 
@@ -177,7 +177,7 @@ user.tradingEnabled = true;
 await user.save();
 
 
-    // 🔥 MARK TRANSACTION COMPLETED (CORRECT STATUS)
+    // MARK TRANSACTION COMPLETED (CORRECT STATUS)
     await Transaction.findOneAndUpdate(
       {
         userId: user._id,

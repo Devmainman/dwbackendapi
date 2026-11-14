@@ -150,7 +150,7 @@ export const recordVisit = async (req, res) => {
     });
 
     if (session) {
-      // ✅ Add visit to existing session
+      // Add visit to existing session
       session.visitedPages.push(visit);
       session.basicInfo.pagesVisited += 1;
       
@@ -164,7 +164,7 @@ export const recordVisit = async (req, res) => {
       
       await session.save();
     } else {
-      // ✅ Create new session
+      // Create new session
       const basicInfo = {
         device: agent.device.toString() || 'Unknown',
         os: agent.os.toString() || 'Unknown',
@@ -196,7 +196,7 @@ export const recordVisit = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('❌ Error recording visit:', err);
+    console.error('Error recording visit:', err);
     res.status(500).json({ success: false, message: 'Failed to record visit' });
   }
 };
@@ -228,7 +228,7 @@ export const endSession = async (req, res) => {
 
     res.status(200).json({ success: true, message: 'Session ended' });
   } catch (err) {
-    console.error('❌ Error ending session:', err);
+    console.error('Error ending session:', err);
     res.status(500).json({ success: false, message: 'Failed to end session' });
   }
 };

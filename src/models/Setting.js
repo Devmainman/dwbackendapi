@@ -28,7 +28,7 @@ const settingSchema = new mongoose.Schema({
 
   adminEmail: { type: String, default: 'nojigpotal@gmail.com' },
 
-  // 🔥 SIGNAL STRENGTH CONTROLS
+  // SIGNAL STRENGTH CONTROLS
   signalStrength: {
     trading: { type: Number, default: 0 },          // Manual trading
     copyTrading: { type: Number, default: 0 },      // Copy trading

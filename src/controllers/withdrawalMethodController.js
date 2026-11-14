@@ -57,7 +57,7 @@ export const getActiveWithdrawalMethods = async (req, res) => {
   try {
     const defaultCurrencyCode = await getDefaultCurrency();
 
-    // ✅ Fetch user to get currency
+    // Fetch user to get currency
     const user = await User.findById(req.user.id).select('currency').lean();
     if (!user || !user.currency) {
       return res.status(400).json({

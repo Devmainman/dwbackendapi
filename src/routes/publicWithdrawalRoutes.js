@@ -1,6 +1,6 @@
 import express from 'express';
 import { getActiveWithdrawalMethods } from '../controllers/withdrawalMethodController.js';
-import { authenticate } from '../middleware/auth.js'; // 👈 import it
+import { authenticate } from '../middleware/auth.js'; // import it
 
 const router = express.Router();
 

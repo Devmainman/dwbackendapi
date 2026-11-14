@@ -23,7 +23,7 @@ if (!name || strength === undefined || !amount) {
       });
     }
 
-    // 🔥 Fetch default currency from settings
+    // Fetch default currency from settings
     const setting = await Setting.findOne();
     const currency = setting?.defaultCurrency || 'USD';
 
@@ -70,7 +70,7 @@ export const getAllSignalPackages = async (req, res) => {
     const packages = await SignalPackage.find()
       .sort({ createdAt: -1 });
 
-    // 🔥 Get currency from settings
+    // Get currency from settings
     const setting = await Setting.findOne();
     const currency = setting?.defaultCurrency || 'USD';
 
@@ -112,7 +112,7 @@ export const updateSignalPackage = async (req, res) => {
       id,
       {
         ...req.body,
-        benefits: benefitsParsed   // 🔥 FIXED
+        benefits: benefitsParsed   // FIXED
       },
       { new: true }
     );
@@ -125,7 +125,7 @@ export const updateSignalPackage = async (req, res) => {
       });
     }
 
-    // 🔥 Attach currency dynamically
+    // Attach currency dynamically
     const setting = await Setting.findOne();
     const currency = setting?.defaultCurrency || 'USD';
 

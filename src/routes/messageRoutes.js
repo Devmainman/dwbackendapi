@@ -16,7 +16,7 @@ const router = express.Router();
 // Apply auth and admin checks globally
 router.use(authenticate, isAdmin);
 
-// ✅ This must come first — before dynamic `/:id` routes
+// This must come first — before dynamic `/:id` routes
 router.get('/sent', getSentMessages);
 
 // For viewing all messages sent to a user (admin viewing specific user inbox)

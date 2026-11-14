@@ -1,12 +1,12 @@
 import mongoose from 'mongoose';
 import User from '../models/User.js';
 import Package from '../models/Package.js';
-import PackageUpgradeInteraction from '../models/PackageUpgradeInteraction.js'; // ⬅️ import this
+import PackageUpgradeInteraction from '../models/PackageUpgradeInteraction.js'; // import this
 
 
 export const assignPackage = async (req, res) => {
   try {
-    console.log('🔥 assignPackage hit', req.params);
+    console.log('assignPackage hit', req.params);
     const { userId, packageId } = req.params;
 
     const user = await User.findById(userId);
@@ -19,14 +19,14 @@ export const assignPackage = async (req, res) => {
       });
     }
 
-    // 🔥 Reset interaction so modal can show again
+    // Reset interaction so modal can show again
     await PackageUpgradeInteraction.findOneAndDelete({ userId });
 
-    // 🔥 Clear previous pending package to force change
+    // Clear previous pending package to force change
     user.pendingPackage = null;
     await user.save();
 
-    // ✅ Assign new pending package
+    // Assign new pending package
     user.pendingPackage = pkg._id;
     user.hasNewPendingPackage = true;
     await user.save();
@@ -70,7 +70,7 @@ export const unassignPackage = async (req, res) => {
       user,
     });
   } catch (error) {
-    console.error('❌ Error unassigning package:', error);
+    console.error('Error unassigning package:', error);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 };
@@ -83,33 +83,33 @@ export const editUserPackage = async (req, res) => {
     const { id } = req.params;
     const { packageId } = req.body;
 
-    console.log('📦 Editing user package for user ID:', id, 'with packageId:', packageId);
+    console.log('Editing user package for user ID:', id, 'with packageId:', packageId);
 
     const user = await User.findById(id);
     if (!user) {
-      console.log('❌ User not found');
+      console.log('User not found');
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
     const pkg = await Package.findById(packageId);
     if (!pkg) {
-      console.log('❌ Package not found');
+      console.log('Package not found');
       return res.status(404).json({ success: false, message: 'Package not found' });
     }
 
-    console.log('🎯 Assigning accountType =', pkg._id, typeof pkg._id);
+    console.log('Assigning accountType =', pkg._id, typeof pkg._id);
     user.accountType = pkg._id;
-    console.log('👤 user.accountType before save:', user.accountType);
+    console.log('user.accountType before save:', user.accountType);
 
     const updated = await user.save({ validateBeforeSave: true }).catch(err => {
-      console.error('❌ Save validation failed:', err);
+      console.error('Save validation failed:', err);
       throw err;
     });
 
-    console.log('✅ Saved user with accountType:', updated.accountType);
+    console.log('Saved user with accountType:', updated.accountType);
 
     const populatedUser = await User.findById(id).populate('accountType');
-    console.log('✅ Populated User accountType name:', populatedUser.accountType?.name);
+    console.log('Populated User accountType name:', populatedUser.accountType?.name);
 
     res.json({
       success: true,
@@ -118,7 +118,7 @@ export const editUserPackage = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('🔥 Error editing user package:', error);
+    console.error('Error editing user package:', error);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 };

@@ -177,7 +177,7 @@ export const getAllMessages = async (req, res) => {
   .sort({ createdAt: -1 })
   .skip(skip)
   .limit(limit)
-  .exec(); // 🔥 Important to enable virtuals
+  .exec(); // Important to enable virtuals
 
 
     const total = await Message.countDocuments(query);
@@ -209,7 +209,7 @@ export const getMessageDetails = async (req, res) => {
     const message = await Message.findById(id)
   .populate({ path: 'recipientDetails' })
   .populate({ path: 'senderDetails' })
-  .exec(); // 🔥 Needed for virtuals
+  .exec(); // Needed for virtuals
 
 
     if (!message) {

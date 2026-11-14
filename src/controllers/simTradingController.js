@@ -58,7 +58,7 @@ export const buy = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // 🔥 FETCH ADMIN SIGNAL
+    // FETCH ADMIN SIGNAL
     const settings = await Setting.findOne();
     const adminSignal = Number(settings?.signalStrength?.trading);
 
@@ -68,7 +68,7 @@ export const buy = async (req, res) => {
       });
     }
 
-    // 🔥 SIGNAL CHECKS
+    // SIGNAL CHECKS
     if (user.tradingSignalStrength <= 0) {
       return res.status(400).json({
         error: 'Your trading signal strength is exhausted'
@@ -81,7 +81,7 @@ export const buy = async (req, res) => {
       });
     }
 
-    // ❗ BALANCE LOGIC — UNTOUCHED
+    // BALANCE LOGIC — UNTOUCHED
     if (user.balance < amount) {
       return res.status(400).json({ error: 'Insufficient balance' });
     }
@@ -89,10 +89,10 @@ export const buy = async (req, res) => {
     const price = getMockPrice();
     const quantity = Number((amount / price).toFixed(8));
 
-    // ❗ BALANCE DEDUCTION — SAME AS BEFORE
+    // BALANCE DEDUCTION — SAME AS BEFORE
     await user.updateBalance(amount, 'debit');
 
-    // 🔥 DEDUCT SIGNAL (FIXED AMOUNT)
+    // DEDUCT SIGNAL (FIXED AMOUNT)
     user.tradingSignalStrength =
       Number((user.tradingSignalStrength - adminSignal).toFixed(2));
     user.tradingSignalUpdatedAt = new Date();
@@ -151,7 +151,7 @@ export const sell = async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // 🔥 FETCH ADMIN SIGNAL
+    // FETCH ADMIN SIGNAL
     const settings = await Setting.findOne();
     const adminSignal = Number(settings?.signalStrength?.trading);
 
@@ -159,7 +159,7 @@ export const sell = async (req, res) => {
       return res.status(400).json({ error: 'Trading disabled by admin' });
     }
 
-    // 🔥 SIGNAL CHECKS
+    // SIGNAL CHECKS
     if (user.tradingSignalStrength <= 0) {
       return res.status(400).json({
         error: 'Your trading signal strength is exhausted'
@@ -181,7 +181,7 @@ export const sell = async (req, res) => {
       console.log(`Selling symbol: ${symbol} with amount: ${amount || 'full'}`);
     }
 
-    // 🔥 DEDUCT SIGNAL STRENGTH
+    // DEDUCT SIGNAL STRENGTH
     user.tradingSignalStrength = Number((user.tradingSignalStrength - adminSignal).toFixed(2));
     user.tradingSignalUpdatedAt = new Date();
     await user.save();

@@ -143,7 +143,7 @@ export const getUserDeposits = async (req, res) => {
       id: d._id,
       date: d.createdAt,
       paymentMethod: d.paymentMethodId?.title || 'Unknown',
-      icon: d.paymentMethodId?.icon || '💳',
+      icon: d.paymentMethodId?.icon || '',
       amount: d.amount.toLocaleString('en-US') + ' ' + d.currency,
       status: d.status,
       proofUrl: d.paymentProof || ''
@@ -202,7 +202,7 @@ export const getDeposits = async (req, res) => {
       accountId: d.userId?.accountId || 'N/A',
       fullName: d.userId ? `${d.userId.firstName} ${d.userId.lastName}` : 'Unknown',
       paymentMethod: d.paymentMethodId?.title || 'Bank Transfer',
-      icon: d.paymentMethodId?.icon || '💷',
+      icon: d.paymentMethodId?.icon || '',
       amount: d.amount,
       currency: d.currency,
       status: d.status,

@@ -71,7 +71,7 @@ export const saveSettings = async (req, res) => {
             settings[key] = value;
           }
         } else {
-          settings[key] = value; // 👈 THIS FIXES signalStrength
+          settings[key] = value; // THIS FIXES signalStrength
         }
         }
       }

@@ -125,7 +125,7 @@ const allowedOrigins = [env.FRONTEND_URL, env.ADMIN_URL, ...(env.CORS_ORIGINS ||
   .filter(Boolean);
 
 if (allowedOrigins.length === 0) {
-  console.warn('⚠️  CORS_ORIGINS / FRONTEND_URL not set: allowing all origins. Set them in production.');
+  console.warn(' CORS_ORIGINS / FRONTEND_URL not set: allowing all origins. Set them in production.');
 }
 
 // Entries may contain one wildcard label, e.g. https://*.vercel.app for preview deployments.

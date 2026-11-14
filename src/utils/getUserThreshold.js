@@ -7,13 +7,13 @@ export const getUserThreshold = async (user) => {
   let threshold = null;
   let packageCurrencyCode = null;
 
-  // ✅ If populated accountType has threshold
+  // If populated accountType has threshold
   if (user.accountType && typeof user.accountType === 'object') {
     threshold = user.accountType.threshold;
     packageCurrencyCode = user.accountType.currency;
   }
 
-  // ✅ If accountType is an ObjectId (not populated)
+  // If accountType is an ObjectId (not populated)
   if ((!threshold || !packageCurrencyCode) && mongoose.Types.ObjectId.isValid(user.accountType)) {
     const pkg = await Package.findById(user.accountType);
     if (pkg) {
@@ -22,7 +22,7 @@ export const getUserThreshold = async (user) => {
     }
   }
 
-  // ✅ If accountType is object with _id but missing fields
+  // If accountType is object with _id but missing fields
   if ((!threshold || !packageCurrencyCode) && user.accountType && user.accountType._id) {
     const pkg = await Package.findById(user.accountType._id);
     if (pkg) {
@@ -31,14 +31,14 @@ export const getUserThreshold = async (user) => {
     }
   }
 
-  // ❓ If still no threshold, use default system setting
+  // If still no threshold, use default system setting
   if (!threshold || isNaN(threshold)) {
     const settings = await Setting.findOne();
     threshold = settings?.defaultThreshold || 1000;
     packageCurrencyCode = settings?.defaultCurrency || 'USD';
   }
 
-  // ✅ Currency conversion
+  // Currency conversion
   const userCurrency = await Currency.findOne({ code: user.currency });
   const packageCurrency = await Currency.findOne({ code: packageCurrencyCode });
 

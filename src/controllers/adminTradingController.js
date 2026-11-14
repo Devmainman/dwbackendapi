@@ -103,7 +103,7 @@ export const createTradePackage = async (req, res) => {
       });
     }
 
-    // 🔥 Get default currency from settings
+    // Get default currency from settings
     const settings = await Setting.findOne().lean();
     const defaultCurrency = settings?.defaultCurrency || 'USD';
 
@@ -181,7 +181,7 @@ export const updateTradePackage = async (req, res) => {
     const { id } = req.params;
     const updates = req.body;
 
-    // ❌ Block currency edits
+    // Block currency edits
     delete updates.currency;
     delete updates.defaultCurrency;
 

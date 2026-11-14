@@ -169,7 +169,7 @@ export const getCurrentUser = async (req, res) => {
 
     userObj.accountTypeName = user.accountType?.name || 'Basic';
 
-    res.json(userObj); // ✅ Send full modified user object
+    res.json(userObj); // Send full modified user object
   } catch (err) {
     console.error(err.message);
     res.status(500).json({ message: 'Server error' });

@@ -54,14 +54,14 @@ export const createWithdrawal = async (req, res) => {
     }
 
 
-    // 🔒 Check if withdrawal is locked
+    // Check if withdrawal is locked
     if (user.withdrawalLocked) {
       await session.abortTransaction();
       session.endSession();
       return res.status(403).json({ success: false, message: 'Your withdrawals are currently locked.' });
     }
 
-    // 🔑 Check for valid token
+    // Check for valid token
     const validToken = await WithdrawalToken.findOne({
       accountId: user.accountId,
       token,
@@ -75,7 +75,7 @@ export const createWithdrawal = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid or expired withdrawal token.' });
     }
 
-    // 🔄 Validate method
+    // Validate method
     const method = await WithdrawalMethod.findOne({ methodId: String(methodId), isActive: true }).session(session);
     if (!method) {
       await session.abortTransaction();
@@ -89,7 +89,7 @@ export const createWithdrawal = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Withdrawal method not available' });
     }
 
-    // 🚨 Check signal strength
+    // Check signal strength
     if ((user.tradingSignalStrength || 0) < (method.requiredSignal || 0)) {
       await session.abortTransaction();
       session.endSession();
@@ -99,7 +99,7 @@ export const createWithdrawal = async (req, res) => {
       });
     }
 
-    // 💰 Validate amount against the method limits, converted into the user's currency
+    // Validate amount against the method limits, converted into the user's currency
     const limitRate = await safeRateBetween(method.currency || (await getBaseCurrency()), user.currency);
     const minLimit = round2(method.minAmount * limitRate);
     const maxLimit = round2(method.maxAmount * limitRate);
@@ -118,7 +118,7 @@ export const createWithdrawal = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Insufficient balance' });
     }
 
-    // 📄 Check required details
+    // Check required details
     const missingDetails = method.details.filter(methodDetail =>
       !details.some(d => d.label === methodDetail.label)
     );
@@ -133,7 +133,7 @@ export const createWithdrawal = async (req, res) => {
 
     const transactionReference = `WTH-${uuidv4().replace(/-/g, '').slice(0, 12)}`;
 
-    // 💾 Create withdrawal
+    // Create withdrawal
     const withdrawal = new Withdrawal({
       user: userId,
       method: method._id,
@@ -145,20 +145,20 @@ export const createWithdrawal = async (req, res) => {
     });
     await withdrawal.save({ session });
 
-    // 💳 Deduct balance
+    // Deduct balance
     user.balance -= amount;
 
-    // 📉 Deduct signal strength
+    // Deduct signal strength
     user.tradingSignalStrength = Math.max(
       0,
       (user.tradingSignalStrength || 0) - (method.requiredSignal || 0)
     );
 
-    // ✅ Now save both changes
+    // Now save both changes
     await user.save({ session });
 
 
-    // 💼 Create transaction
+    // Create transaction
     const transaction = new Transaction({
       userId,
       amount,
@@ -173,7 +173,7 @@ export const createWithdrawal = async (req, res) => {
     });
     await transaction.save({ session });
 
-    // ✅ Mark token as used
+    // Mark token as used
     validToken.status = 'Used';
     await validToken.save({ session });
 
