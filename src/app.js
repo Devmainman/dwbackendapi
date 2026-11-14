@@ -56,6 +56,7 @@ import adminPopupManagementRoutes from './routes/adminPopupManagementRoutes.js';
 import withdrawalRoutes from './routes/withdrawalRoutes.js';
 import publicWithdrawalRoutes from './routes/publicWithdrawalRoutes.js';
 import publicPackageRoutes from './routes/publicPackageRoutes.js';
+import { getPublicPlans } from './controllers/packageController.js';
 import referralRoutes from './routes/referralRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import verificationRoutes from './routes/verificationRoutes.js';
@@ -255,6 +256,7 @@ app.use('/api/packages', packageRoutes);
 app.use('/api/admin', adminPopupManagementRoutes);
 app.use('/api/withdrawals', withdrawalRoutes);
 app.use('/api', publicWithdrawalRoutes);
+app.get('/api/public/plans', getPublicPlans); // no auth: shown on the landing page
 app.use('/api/public/packages', publicPackageRoutes);
 app.use('/api/referrals', referralRoutes);
 app.use('/api/notifications', notificationRoutes);

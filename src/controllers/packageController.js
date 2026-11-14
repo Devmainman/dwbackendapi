@@ -469,3 +469,13 @@ export const getUsersByPackage = async (req, res) => {
     });
   }
 };
+// Public: active account plans for the landing page (display fields only).
+export const getPublicPlans = async (req, res) => {
+  try {
+    const packages = await Package.find({ status: 'Active' }).sort({ amount: 1 }).select('name amount benefits -_id').lean();
+    const currency = await getDefaultCurrency();
+    res.json({ success: true, currency, plans: packages });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Could not load plans' });
+  }
+};
