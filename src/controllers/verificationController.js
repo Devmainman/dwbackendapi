@@ -45,7 +45,7 @@ const saveFile = async (file, folder) => {
     file.mv(uploadPath, (err) => {
       if (err) {
         console.error('File move error:', err);
-        return reject(new Error('File upload failed'));
+        return reject(err.status ? err : new Error('File upload failed'));
       }
       resolve();
     });
