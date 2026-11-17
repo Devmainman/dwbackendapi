@@ -22,10 +22,11 @@
   "license": "ISC",
   "description": "Backend API for Investment Platform",
   "dependencies": {
-    "@vercel/blob": "^1.1.1",
+    "@vercel/blob": "^2.9.0",
     "@vercel/functions": "^2.2.13",
     "axios": "^1.21.1",
     "bcryptjs": "^2.4.3",
+    "buffer-equal-constant-time": "file:vendor/buffer-equal-constant-time",
     "cloudinary": "^1.41.1",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
@@ -50,8 +51,7 @@
     "ua-parser-js": "^2.0.3",
     "useragent": "^2.3.0",
     "uuid": "^14.0.3",
-    "ws": "^8.18.2",
-    "buffer-equal-constant-time": "file:vendor/buffer-equal-constant-time"
+    "ws": "^8.18.2"
   },
   "devDependencies": {
     "esbuild": "^0.25.5",

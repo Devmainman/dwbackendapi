@@ -4,7 +4,7 @@
 // express.static (unchanged behaviour).
 //
 // On Vercel the filesystem is read-only and not persistent, so when a Vercel
-// Blob store is connected (BLOB_READ_WRITE_TOKEN) every uploaded file is saved
+// Blob store is connected (BLOB_READ_WRITE_TOKEN or BLOB_STORE_ID) every uploaded file is saved
 // to Blob under the same relative path. Controllers keep storing the usual
 // "/uploads/<folder>/<file>" strings; the /uploads route redirects to Blob.
 // Identity documents (PRIVATE_UPLOAD_DIRS) are stored under an HMAC-derived,
@@ -16,7 +16,9 @@ import { syncBuiltinESMExports } from 'module';
 import { UPLOAD_ROOT, PRIVATE_UPLOAD_DIRS } from '../config/paths.js';
 
 export const isServerless = () => !!process.env.VERCEL;
-export const blobEnabled = () => !!process.env.BLOB_READ_WRITE_TOKEN;
+// Connected either the classic way (read-write token) or the newer way (store ID +
+// Vercel OIDC, which @vercel/blob v2 picks up on its own inside a deployment).
+export const blobEnabled = () => !!(process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID);
 
 const secret = () => process.env.JWT_SECRET || 'storage';
 const normalize = (rel) => String(rel || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/^uploads\//i, '');
