@@ -22,6 +22,9 @@ const signalPackageSchema = new mongoose.Schema({
   },
 
 
+  // What the admin typed for strength when it is more than a number, e.g. "20 +".
+  strengthLabel: { type: String, default: "" },
+
   benefits: [String],
 
 

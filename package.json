@@ -13,6 +13,7 @@
     "seed:mining": "node seed.js --mining",
     "seed:trading": "node scripts/seedTraders.js",
     "seed:products": "node scripts/seedProducts.js",
+    "seed:demo": "node scripts/seedDemoContent.js",
     "create-admin": "node scripts/createAdmin.js",
     "vercel-build": "echo \"No build step: the API runs from source on Vercel\"",
     "bundle": "esbuild src/app.js --bundle --platform=node --target=node20 --format=esm --packages=external --outfile=dist/app.js"

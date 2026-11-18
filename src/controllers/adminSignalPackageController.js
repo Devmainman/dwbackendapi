@@ -1,66 +1,84 @@
-
-
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { v4 as uuidv4 } from 'uuid';
 import SignalPackage from '../models/SignalPackage.js';
 import Setting from '../models/Setting.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// First number in free text: "20 +" -> 20, "$1,500" -> 1500, "80%" -> 80.
+const numberIn = (v) => {
+  const m = String(v ?? '').replace(/,/g, '').match(/-?\d+(\.\d+)?/);
+  return m ? Number(m[0]) : NaN;
+};
+
+/**
+ * Read a signal package from the admin form. Admins may type text like "20 +"
+ * for strength or "$150" for price: the number is used for logic, and the text
+ * as typed is kept as a display label so users see exactly what the admin wrote.
+ */
+const readPackage = (body, { partial = false } = {}) => {
+  const errors = [];
+  const data = {};
+  if (!partial || body.name !== undefined) {
+    data.name = String(body.name || '').trim();
+    if (!data.name) errors.push('Name is required');
+  }
+  if (!partial || body.strength !== undefined) {
+    const raw = String(body.strength ?? '').trim();
+    const n = numberIn(raw);
+    if (!Number.isFinite(n) || n < 0 || n > 100) errors.push('Signal strength must contain a number from 0 to 100 (for example "20" or "20 +")');
+    else {
+      data.strength = n;
+      data.strengthLabel = raw && raw !== String(n) ? raw : '';
+    }
+  }
+  if (!partial || body.amount !== undefined) {
+    const raw = String(body.amount ?? '').trim();
+    const n = numberIn(raw);
+    if (!Number.isFinite(n) || n <= 0) errors.push('Price must contain a number above 0');
+    else data.amount = n;
+  }
+  if (body.benefits !== undefined) {
+    let list = body.benefits;
+    if (typeof list === 'string') {
+      try { list = JSON.parse(list); } catch { list = list.split('\n'); }
+    }
+    data.benefits = (Array.isArray(list) ? list : [list]).map((b) => String(b ?? '').trim()).filter(Boolean);
+  }
+  if (body.active !== undefined) data.active = body.active === true || body.active === 'true';
+  return { errors, data };
+};
+
+// Optional icon upload (goes to Blob storage on Vercel through the upload middleware).
+const saveIcon = async (file) => {
+  if (!file) return null;
+  const name = `${uuidv4()}${path.extname(file.name || '') || '.png'}`;
+  await file.mv(path.join(__dirname, '../uploads/signal-icons', name));
+  return `/uploads/signal-icons/${name}`;
+};
+
+const withCurrency = async (doc) => {
+  const setting = await Setting.findOne().lean();
+  return { ...(doc.toObject ? doc.toObject() : doc), currency: setting?.defaultCurrency || 'USD' };
+};
 
 /* ==========================================
    CREATE SIGNAL PACKAGE (ADMIN)
    ========================================== */
 export const createSignalPackage = async (req, res) => {
   try {
-    const {
-  name,
-  strength,
-  amount,
-  benefits,
-  icon
-} = req.body;
-
-if (!name || strength === undefined || !amount) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing required fields'
-      });
-    }
-
-    // Fetch default currency from settings
-    const setting = await Setting.findOne();
-    const currency = setting?.defaultCurrency || 'USD';
-
-    let benefitsParsed = benefits;
-
-if (typeof benefits === 'string') {
-  benefitsParsed = JSON.parse(benefits);
-}
-
-
-    const pkg = await SignalPackage.create({
-      name,
-      strength,
-      amount,
-      benefits: benefitsParsed,
-      icon
-    });
-
-
-    res.json({
-      success: true,
-      message: 'Signal package created successfully',
-      package: {
-        ...pkg.toObject(),
-        currency   // return currency dynamically
-      }
-    });
-
+    const { errors, data } = readPackage(req.body);
+    if (errors.length) return res.status(400).json({ success: false, message: errors.join('. ') });
+    const icon = await saveIcon(req.files?.icon);
+    if (icon) data.icon = icon;
+    const pkg = await SignalPackage.create(data);
+    res.json({ success: true, message: 'Signal package created successfully', package: await withCurrency(pkg) });
   } catch (err) {
     console.error('Create signal package error:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Server error creating signal package'
-    });
+    res.status(500).json({ success: false, message: err.message || 'Server error creating signal package' });
   }
 };
-
 
 /* ==========================================
    GET ALL SIGNAL PACKAGES (ADMIN)
@@ -99,51 +117,16 @@ export const getAllSignalPackages = async (req, res) => {
    ========================================== */
 export const updateSignalPackage = async (req, res) => {
   try {
-    const { id } = req.params;
-
-    let { benefits } = req.body;
-
-    let benefitsParsed = benefits;
-    if (typeof benefits === 'string') {
-      benefitsParsed = JSON.parse(benefits);
-    }
-
-    const updated = await SignalPackage.findByIdAndUpdate(
-      id,
-      {
-        ...req.body,
-        benefits: benefitsParsed   // FIXED
-      },
-      { new: true }
-    );
-
-
-    if (!updated) {
-      return res.status(404).json({
-        success: false,
-        message: 'Signal package not found'
-      });
-    }
-
-    // Attach currency dynamically
-    const setting = await Setting.findOne();
-    const currency = setting?.defaultCurrency || 'USD';
-
-    res.json({
-      success: true,
-      message: 'Signal package updated',
-      package: {
-        ...updated.toObject(),
-        currency
-      }
-    });
-
+    const { errors, data } = readPackage(req.body, { partial: true });
+    if (errors.length) return res.status(400).json({ success: false, message: errors.join('. ') });
+    const icon = await saveIcon(req.files?.icon);
+    if (icon) data.icon = icon;
+    const updated = await SignalPackage.findByIdAndUpdate(req.params.id, { $set: data }, { new: true, runValidators: true });
+    if (!updated) return res.status(404).json({ success: false, message: 'Signal package not found' });
+    res.json({ success: true, message: 'Signal package updated', package: await withCurrency(updated) });
   } catch (err) {
     console.error('Update signal package error:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Server error updating signal package'
-    });
+    res.status(500).json({ success: false, message: err.message || 'Server error updating signal package' });
   }
 };
 

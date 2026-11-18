@@ -3,6 +3,7 @@
 // runDueJobs() is triggered by traffic (throttled) and by Vercel Cron.
 // Every job is idempotent: each record is settled with a status-guarded update.
 import { settleDueTrades } from './botTradeEngine.js';
+import { runDueBotTrades } from './smartBotEngine.js';
 import { finishExpiredSessions } from './miningEngine.js';
 import { refreshMarkPrices } from './markPriceFeed.js';
 import { syncIfDue } from './fx.js';
@@ -23,7 +24,8 @@ export const runDueJobs = () => {
       safe('stop monitor', checkStops),
       safe('mining sessions', finishExpiredSessions),
       safe('copy-trading prices', refreshMarkPrices),
-      safe('fx sync', syncIfDue)
+      safe('fx sync', syncIfDue),
+      safe('ai smart trader', runDueBotTrades)
     ]);
     lastRun = Date.now();
     return { trades, stops, mining, ms: lastRun - started };

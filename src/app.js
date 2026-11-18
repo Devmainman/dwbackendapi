@@ -88,6 +88,10 @@ import adminSettingsRoutes from './routes/adminSettingsRoutes.js';
 // New product modules
 import coldStorageRoutes from './routes/coldStorageRoutes.js';
 import cardRoutes from './routes/cardRoutes.js';
+import { cardRequestRouter, adminCardSettingsRouter, adminCardInvoicesRouter } from './routes/cardRequestRoutes.js';
+import { smartBotRouter, adminSmartBotRouter, adminBotInvoiceRouter } from './routes/smartBotRoutes.js';
+import { runDueBotTrades } from './services/smartBotEngine.js';
+import { publicBlogRouter, adminBlogRouter } from './routes/blogRoutes.js';
 import walletRoutes from './routes/walletRoutes.js';
 import stockRoutes from './routes/stockRoutes.js';
 import stakingRoutes from './routes/stakingRoutes.js';
@@ -257,6 +261,9 @@ app.use('/api/admin', adminPopupManagementRoutes);
 app.use('/api/withdrawals', withdrawalRoutes);
 app.use('/api', publicWithdrawalRoutes);
 app.get('/api/public/plans', getPublicPlans); // no auth: shown on the landing page
+// Blog is public (no login), mounted before the routers that require one.
+app.use('/api/public/blog', publicBlogRouter);
+app.use('/api/admin/blog', adminBlogRouter);
 app.use('/api/public/packages', publicPackageRoutes);
 app.use('/api/referrals', referralRoutes);
 app.use('/api/notifications', notificationRoutes);
@@ -290,6 +297,12 @@ app.use('/api/admin/settings', adminSettingsRoutes);
 // New product modules
 app.use('/api/cold-storage', coldStorageRoutes);
 app.use('/api/cards', cardRoutes);
+app.use('/api/card-requests', cardRequestRouter);
+app.use('/api/admin/card-settings', adminCardSettingsRouter);
+app.use('/api/admin/card-invoices', adminCardInvoicesRouter);
+app.use('/api/smart-bots', smartBotRouter);
+app.use('/api/admin/smart-bots', adminSmartBotRouter);
+app.use('/api/admin/bot-invoices', adminBotInvoiceRouter);
 app.use('/api/wallets', walletRoutes);
 app.use('/api/stocks', stockRoutes);
 app.use('/api/staking', stakingRoutes);
@@ -369,6 +382,8 @@ export const startServer = async () => {
   const stopMonitor = env.NODE_ENV === 'test' ? null : startStopMonitor();
   const miningJob = startMiningJob();
   const fxJob = startFxSyncJob();
+  // AI Smart Trader: place due bot trades every 30 seconds.
+  const smartBotJob = env.NODE_ENV === 'test' ? null : setInterval(() => { runDueBotTrades().catch((e) => console.warn('[smart-bot]', e.message)); }, 30000);
   const server = app.listen(PORT, () => {
     console.log(`Server running in ${env.NODE_ENV || 'development'} mode on port ${PORT}`);
   });
@@ -380,6 +395,7 @@ export const startServer = async () => {
     if (stopMonitor) clearInterval(stopMonitor);
     clearInterval(miningJob);
     if (fxJob) clearInterval(fxJob);
+    if (smartBotJob) clearInterval(smartBotJob);
     forEachConnection((ws) => ws.close(1001, 'Server shutting down'));
     server.close(() => process.exit(0));
   };

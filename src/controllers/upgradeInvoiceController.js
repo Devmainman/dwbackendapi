@@ -2,6 +2,7 @@ import { escapeRegex } from '../utils/validation.js';
 import UpgradeInvoice from '../models/UpgradeInvoice.js';
 import User from '../models/User.js';
 import Package from '../models/Package.js';
+import { priceForUser } from './packageController.js';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
@@ -14,22 +15,51 @@ const __dirname = path.dirname(__filename);
 // Create new upgrade invoice
 export const createUpgradeInvoice = async (req, res) => {
   try {
-    const { paymentMethod, amount, currency } = req.body;
+    const { paymentMethod, packageId } = req.body;
 
-    if (!req.files?.paymentProof || !paymentMethod || !amount || !currency) {
+    if (!req.files?.paymentProof || !paymentMethod) {
       return res.status(400).json({
         success: false,
-        message: 'Missing required fields or payment proof'
+        message: 'Choose a payment method and upload your payment proof'
       });
     }
 
     const user = await User.findById(req.user.id).populate('pendingPackage');
-    if (!user || !user.pendingPackage) {
-      return res.status(404).json({
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    // The plan comes from the request (older clients relied on a saved "pending" plan).
+    const chosen = packageId ? await Package.findById(packageId).catch(() => null) : user.pendingPackage;
+    if (!chosen || (chosen.status && chosen.status !== 'Active')) {
+      return res.status(404).json({ success: false, message: 'This plan is no longer available. Please pick another one.' });
+    }
+    if (user.accountType && String(user.accountType) === String(chosen._id)) {
+      return res.status(400).json({ success: false, message: `You are already on the ${chosen.name} plan.` });
+    }
+
+    // Signal strength gate: the plan may need a minimum trading signal strength.
+    const need = Number(chosen.requiredSignal || 0);
+    const have = Number(user.tradingSignalStrength || 0);
+    if (need > have) {
+      return res.status(403).json({
         success: false,
-        message: 'User or pending package not found'
+        code: 'SIGNAL_TOO_LOW',
+        requiredSignal: need,
+        userSignal: have,
+        message: `The ${chosen.name} plan needs at least ${need}% signal strength. Yours is ${have}%. Buy a signal package to raise it, then upgrade.`
       });
     }
+
+    // One payment under review per plan at a time.
+    const pending = await UpgradeInvoice.findOne({ user: user._id, package: chosen._id, status: { $in: ['pending', 'disputed'] } }).lean();
+    if (pending) {
+      return res.status(409).json({ success: false, message: `Your payment for the ${chosen.name} plan is already being reviewed.` });
+    }
+
+    // Price is worked out here, never taken from the browser.
+    const { amount, currency } = await priceForUser(chosen, user);
+    user.pendingPackage = chosen;
 
     const paymentProof = req.files.paymentProof;
     const uploadDir = path.join(__dirname, '../uploads/invoices');
@@ -52,8 +82,8 @@ export const createUpgradeInvoice = async (req, res) => {
       package: user.pendingPackage._id,
       packageSnapshot: {
         name: user.pendingPackage.name,
-        amount: user.pendingPackage.amount,
-        currency: user.pendingPackage.currency
+        amount,
+        currency
       },
       paymentMethod,
       amount,
@@ -170,6 +200,11 @@ export const updateUpgradeInvoiceStatus = async (req, res) => {
       });
     }
 
+    // A decided invoice can't be decided again (double clicks, two admins at once).
+    if (['approve', 'reject', 'dispute'].includes(action) && ['approved', 'rejected'].includes(upgradeInvoice.status)) {
+      return res.status(409).json({ success: false, message: `This invoice was already ${upgradeInvoice.status}.` });
+    }
+
     // Handle different actions
     switch (action) {
       case 'approve':
@@ -225,8 +260,8 @@ export const updateUpgradeInvoiceStatus = async (req, res) => {
         
         // Update user package when approved after dispute
         await User.findByIdAndUpdate(upgradeInvoice.user, {
-          package: upgradeInvoice.package,
-          accountLevel: 'Premium'
+          accountType: upgradeInvoice.package,
+          pendingPackage: null
         });
         break;
         

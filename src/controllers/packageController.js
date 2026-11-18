@@ -2,6 +2,7 @@ import Package from '../models/Package.js';
 import Setting from '../models/Setting.js';
 import Currency from '../models/Currency.js';
 import { getOrCreateBasicPackage } from '../utils/initBasicPackage.js';
+import UpgradeInvoice from '../models/UpgradeInvoice.js';
 import User from '../models/User.js';
 import { fileURLToPath } from 'url';
 import path from 'path';
@@ -34,7 +35,7 @@ const handleIconUpload = (req) => {
 };
 
 // Helper to get default currency from settings
-const getDefaultCurrency = async () => {
+export const getDefaultCurrency = async () => {
   try {
     const setting = await Setting.findOne().lean();
     if (!setting?.defaultCurrency) {
@@ -187,6 +188,19 @@ export const getUserPackages = async (req, res) => {
     const userAccountTypeId = user.accountType?.toString();
     packages = packages.filter(pkg => pkg._id.toString() !== userAccountTypeId);
 
+    // What the plans page needs to explain itself: the user's signal strength and
+    // which plans already have a payment under review.
+    const userSignal = Number(user.tradingSignalStrength || 0);
+    const pendingIds = new Set(
+      (await UpgradeInvoice.find({ user: user._id, status: { $in: ['pending', 'disputed'] } }).select('package').lean())
+        .map((i) => String(i.package))
+    );
+    packages = packages.map((pkg) => ({
+      ...pkg,
+      requiredSignal: Number(pkg.requiredSignal || 0),
+      paymentPending: pendingIds.has(String(pkg._id))
+    }));
+
     // If user currency is same as default, no conversion needed
     if (userCurrencyCode === defaultCurrency) {
       const packagesWithCurrency = packages.map(pkg => ({
@@ -194,9 +208,10 @@ export const getUserPackages = async (req, res) => {
         currency: defaultCurrency
       }));
 
-      return res.json({ 
-        success: true, 
-        packages: packagesWithCurrency 
+      return res.json({
+        success: true,
+        userSignal,
+        packages: packagesWithCurrency
       });
     }
 
@@ -225,9 +240,10 @@ export const getUserPackages = async (req, res) => {
       };
     });
 
-    res.json({ 
-      success: true, 
-      packages: convertedPackages 
+    res.json({
+      success: true,
+      userSignal,
+      packages: convertedPackages
     });
   } catch (err) {
     console.error('Get User Packages Error:', err);
@@ -478,4 +494,21 @@ export const getPublicPlans = async (req, res) => {
   } catch (err) {
     res.status(500).json({ success: false, message: 'Could not load plans' });
   }
+};
+
+/**
+ * A plan's price in the user's own currency (same conversion the plans page shows).
+ * Used to price upgrade payments on the server, so the browser can't change the amount.
+ */
+export const priceForUser = async (pkg, user) => {
+  const defaultCurrency = await getDefaultCurrency();
+  const code = user?.currency || defaultCurrency;
+  if (code === defaultCurrency) return { amount: pkg.amount, currency: defaultCurrency };
+  const [from, to] = await Promise.all([
+    Currency.findOne({ code: defaultCurrency }).lean(),
+    Currency.findOne({ code }).lean()
+  ]);
+  if (!to?.rate) return { amount: pkg.amount, currency: defaultCurrency };
+  const fromRate = from?.rate || 1;
+  return { amount: parseFloat(((pkg.amount * to.rate) / fromRate).toFixed(2)), currency: code };
 };
