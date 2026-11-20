@@ -194,25 +194,93 @@ router.get('/mining/catalog', handler(async (_req, res) => {
   res.json({ success: true, data: { currency: await getBaseCurrency(), ...c } });
 }));
 
-/** PUT /mining/catalog/:kind/:id  { price?, dailyYieldPercent?, multiplier?, duration?, enabled? } */
-router.put('/mining/catalog/:kind/:id', handler(async (req, res) => {
-  const kind = req.params.kind === 'boosters' ? 'boosters' : req.params.kind === 'equipment' ? 'equipment' : null;
+const catalogKind = (k) => {
+  const kind = k === 'boosters' ? 'boosters' : k === 'equipment' ? 'equipment' : null;
   if (!kind) throw new HttpError(400, 'kind must be equipment or boosters');
-  const all = await getCatalog({ includeDisabled: true });
-  if (!all[kind][req.params.id]) throw new HttpError(404, 'Item not found');
-  const allowed = kind === 'equipment' ? { price: [0, 1e7], dailyYieldPercent: [0, 20] } : { price: [0, 1e6], multiplier: [1, 10], duration: [60, 7 * 86400] };
-  const set = {};
-  for (const [k, [min, max]] of Object.entries(allowed)) {
-    if (req.body?.[k] === undefined || req.body[k] === '') continue;
-    const n = Number(req.body[k]);
-    if (!Number.isFinite(n) || n < min || n > max) throw new HttpError(400, `${k} must be between ${min} and ${max}`);
-    set[`miningCatalog.${kind}.${req.params.id}.${k}`] = n;
+  return kind;
+};
+const MACHINE_TYPES = ['CPU', 'GPU', 'ASIC', 'FPGA'];
+const BOOSTER_TYPES = ['hash_rate', 'energy', 'rewards'];
+const LABEL = {
+  price: 'Price', dailyYieldPercent: 'Daily yield %', hashRate: 'Hash rate', powerConsumption: 'Power (W)',
+  multiplier: 'Multiplier', duration: 'Duration (seconds)'
+};
+const NUMBERS = {
+  equipment: { price: [0, 1e7], dailyYieldPercent: [0, 20], hashRate: [0.01, 1e7], powerConsumption: [0, 1e6] },
+  boosters: { price: [0, 1e6], multiplier: [1, 10], duration: [60, 30 * 86400] }
+};
+
+/** Validated catalog fields from a request body. `full` requires every field (new items). */
+const readCatalogItem = (kind, body = {}, { full = false } = {}) => {
+  const out = {};
+  const errors = [];
+  for (const [k, [min, max]] of Object.entries(NUMBERS[kind])) {
+    if (body[k] === undefined || body[k] === '') { if (full) errors.push(`${LABEL[k]} is required`); continue; }
+    const n = Number(body[k]);
+    if (!Number.isFinite(n) || n < min || n > max) errors.push(`${LABEL[k]} must be between ${min} and ${max}`);
+    else out[k] = n;
   }
-  if (typeof req.body?.enabled === 'boolean') set[`miningCatalog.${kind}.${req.params.id}.enabled`] = req.body.enabled;
-  if (!Object.keys(set).length) throw new HttpError(400, 'Nothing to update');
+  if (body.name !== undefined || full) {
+    out.name = asString(body.name, 60);
+    if (out.name.length < 2) errors.push('Enter a name');
+  }
+  if (body.type !== undefined || full) {
+    const types = kind === 'equipment' ? MACHINE_TYPES : BOOSTER_TYPES;
+    out.type = kind === 'equipment' ? String(body.type || '').toUpperCase() : String(body.type || '');
+    if (!types.includes(out.type)) errors.push(`Type must be one of ${types.join(', ')}`);
+  }
+  if (kind === 'boosters' && body.description !== undefined) out.description = asString(body.description, 120);
+  if (typeof body.enabled === 'boolean') out.enabled = body.enabled;
+  if (errors.length) throw new HttpError(400, errors.join('. '));
+  return out;
+};
+
+/** POST /mining/catalog/:kind  — add a machine or booster to the shop */
+router.post('/mining/catalog/:kind', handler(async (req, res) => {
+  const kind = catalogKind(req.params.kind);
+  const item = readCatalogItem(kind, req.body, { full: true });
+  const all = await getCatalog({ includeDisabled: true });
+  if (Object.values(all[kind]).some((t) => t.name.toLowerCase() === item.name.toLowerCase())) throw new HttpError(409, 'An item with this name already exists');
+  if (kind === 'boosters' && !item.description) {
+    item.description = `${item.multiplier}x earnings for ${item.duration >= 3600 ? `${round2(item.duration / 3600)} hour(s)` : `${Math.round(item.duration / 60)} minutes`}`;
+  }
+  const id = `custom_${new mongoose.Types.ObjectId().toString().slice(-10)}`;
+  await Setting.updateOne({}, { $set: { [`miningCatalog.${kind}.${id}`]: { ...item, custom: true, enabled: item.enabled !== false } } }, { upsert: true });
+  invalidateCatalog();
+  res.status(201).json({ success: true, message: `${item.name} added to the shop`, data: { id, ...(await getCatalog({ includeDisabled: true }))[kind][id] } });
+}));
+
+/** PUT /mining/catalog/:kind/:id  { name?, type?, price?, dailyYieldPercent?, hashRate?, powerConsumption?, multiplier?, duration?, description?, enabled? } */
+router.put('/mining/catalog/:kind/:id', handler(async (req, res) => {
+  const kind = catalogKind(req.params.kind);
+  const id = asString(req.params.id, 40);
+  const all = await getCatalog({ includeDisabled: true });
+  if (!all[kind][id]) throw new HttpError(404, 'Item not found');
+  const item = readCatalogItem(kind, req.body);
+  if (item.name && Object.entries(all[kind]).some(([oid2, t]) => oid2 !== id && t.name.toLowerCase() === item.name.toLowerCase())) {
+    throw new HttpError(409, 'An item with this name already exists');
+  }
+  if (!Object.keys(item).length) throw new HttpError(400, 'Nothing to update');
+  const set = Object.fromEntries(Object.entries(item).map(([k, v]) => [`miningCatalog.${kind}.${id}.${k}`, v]));
+  if (item.hashRate !== undefined || item.powerConsumption !== undefined) {
+    const t = { ...all[kind][id], ...item };
+    set[`miningCatalog.${kind}.${id}.efficiency`] = t.hashRate > 0 ? round2(t.powerConsumption / t.hashRate) : 0;
+  }
   await Setting.updateOne({}, { $set: set }, { upsert: true });
   invalidateCatalog();
-  res.json({ success: true, message: 'Catalog updated', data: (await getCatalog({ includeDisabled: true }))[kind][req.params.id] });
+  res.json({ success: true, message: `${item.name || all[kind][id].name} saved`, data: (await getCatalog({ includeDisabled: true }))[kind][id] });
+}));
+
+/** DELETE /mining/catalog/:kind/:id — remove from the shop. Machines users own keep earning. */
+router.delete('/mining/catalog/:kind/:id', handler(async (req, res) => {
+  const kind = catalogKind(req.params.kind);
+  const id = asString(req.params.id, 40);
+  const all = await getCatalog({ includeDisabled: true });
+  const item = all[kind][id];
+  if (!item) throw new HttpError(404, 'Item not found');
+  await Setting.updateOne({}, { $set: { [`miningCatalog.${kind}.${id}.deleted`]: true } }, { upsert: true });
+  invalidateCatalog();
+  res.json({ success: true, message: `${item.name} removed from the shop` });
 }));
 
 /** POST /mining/sessions/:id/stop — end a running session now and credit what it earned as a pending reward */

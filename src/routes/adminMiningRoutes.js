@@ -10,6 +10,8 @@ import {
   getAllMiningPools,
   getAllMiningBoosters,
   updateMiningPool,
+  createMiningPool,
+  deleteMiningPool,
   updateUserMiningSettings,
   deleteMiningSession,
   deleteMiningReward,
@@ -44,7 +46,9 @@ router.delete('/equipment/:id', deleteMiningEquipment);
 
 // Mining pools management
 router.get('/pools', getAllMiningPools);
+router.post('/pools', createMiningPool);
 router.put('/pools/:id', updateMiningPool);
+router.delete('/pools/:id', deleteMiningPool);
 
 // Mining boosters management
 router.get('/boosters', getAllMiningBoosters);

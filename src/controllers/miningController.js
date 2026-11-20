@@ -45,8 +45,10 @@ export const startMining = handler(async (req, res) => {
   const user = await loadActiveUser(req.user.id);
   await ensureDefaultPools();
   const poolId = req.body.poolId || user.mining?.defaultPool;
-  const pool = mongoose.Types.ObjectId.isValid(poolId) ? await MiningPool.findOne({ _id: poolId, status: 'active' }) : await MiningPool.findOne({ status: 'active' });
-  if (!pool) throw err(404, 'Choose an active mining pool');
+  // The chosen pool, or (if the admin took it offline or removed it) the cheapest active one.
+  const pool = (mongoose.Types.ObjectId.isValid(poolId) && await MiningPool.findOne({ _id: poolId, status: 'active' }))
+    || await MiningPool.findOne({ status: 'active' }).sort({ fee: 1 });
+  if (!pool) throw err(404, 'No mining pool is available right now. Please try again later.');
 
   const equipment = await MiningEquipment.find({ userId: user._id, status: 'active' });
   if (!equipment.length) throw err(400, 'Buy or activate a machine first');
@@ -161,7 +163,11 @@ export const getMiningStats = handler(async (req, res) => {
         pool: active.poolId?.name,
         poolFee: active.metadata?.poolFee || 0,
         dailyEarnings: active.metadata?.dailyYield || 0,
-        earnedSoFar: live?.net || 0
+        earnedSoFar: live?.net || 0,
+        // For the live counter: exact amount at `asOf`, and what it grows by each second now.
+        earnedExact: live?.netExact || 0,
+        ratePerSecond: live?.ratePerSecond || 0,
+        asOf: new Date()
       } : null
     }
   });
@@ -279,8 +285,13 @@ export const activateBooster = handler(async (req, res) => {
   const { amount: price } = await convertFromBase(tpl.price, user.currency);
   const now = new Date();
   const booster = await withTransaction(async (s) => {
-    if (await MiningBooster.exists({ userId: user._id, type: tpl.type, expiresAt: { $gt: now } }).session(s)) {
-      throw err(400, `${tpl.name} is already running`);
+    // One booster of each kind at a time, so boosts don't stack.
+    const running = await MiningBooster.findOne({ userId: user._id, type: tpl.type, expiresAt: { $gt: now } }).session(s).lean();
+    if (running) {
+      const mins = Math.max(1, Math.ceil((new Date(running.expiresAt) - now) / 60000));
+      throw err(400, running.name === tpl.name
+        ? `${tpl.name} is already running (${mins} min left)`
+        : `${running.name} is already running (${mins} min left). Only one ${tpl.type.replace('_', ' ')} booster can run at a time.`);
     }
     await debitUser(user._id, price, { session: s });
     const [b] = await MiningBooster.create([{

@@ -435,8 +435,9 @@ export const getAllMiningPools = async (req, res) => {
     
     // Build filter
     const filter = {};
-    if (status) filter.status = status;
-    if (algorithm) filter.algorithm = algorithm;
+    const real = (v) => v && !['undefined', 'null', 'all'].includes(String(v));
+    if (real(status)) filter.status = status;
+    if (real(algorithm)) filter.algorithm = algorithm;
     
     const pools = await MiningPool.find(filter)
       .sort({ miners: -1 })
@@ -473,8 +474,9 @@ export const getAllMiningPools = async (req, res) => {
         uptime: pool.uptime,
         algorithm: pool.algorithm,
         supportedCoins: pool.supportedCoins,
+        coin: pool.supportedCoins?.[0] || '',
         paymentMethod: pool.paymentMethod,
-        location: pool.location,
+        location: [pool.location?.city, pool.location?.country].filter(Boolean).join(', '),
         status: pool.status,
         features: pool.features,
         statistics: pool.statistics,
@@ -502,61 +504,93 @@ export const getAllMiningPools = async (req, res) => {
   }
 };
 
-// Update mining pool
+/* ------------------------------ Mining pools (create / edit / delete) ------------------------------ */
+
+const POOL_ALGOS = MiningPool.schema.path('algorithm').enumValues;
+const POOL_COINS = MiningPool.schema.path('supportedCoins').caster.enumValues;
+const POOL_STATUSES = ['active', 'maintenance', 'offline'];
+const fail = (res, status, message) => res.status(status).json({ success: false, message, error: message });
+
+/** Reads the fields an admin may set on a pool. Returns { set, errors }. */
+const readPool = (body = {}, { partial = false } = {}) => {
+  const set = {};
+  const errors = [];
+  const has = (k) => !partial || body[k] !== undefined;
+  const num = (v) => (v === '' || v === null || v === undefined ? NaN : Number(v));
+  if (has('name')) { set.name = String(body.name || '').trim().slice(0, 60); if (set.name.length < 2) errors.push('Enter a pool name'); }
+  if (has('url')) { set.url = String(body.url || '').trim().slice(0, 200); if (!set.url) errors.push('Enter the pool URL'); }
+  if (has('fee')) { set.fee = num(body.fee); if (!(set.fee >= 0 && set.fee <= 100)) errors.push('Fee must be between 0 and 100'); }
+  if (body.minPayout !== undefined && body.minPayout !== '') { set.minPayout = num(body.minPayout); if (!(set.minPayout >= 0)) errors.push('Min payout must be 0 or more'); }
+  if (body.uptime !== undefined && body.uptime !== '') { set.uptime = num(body.uptime); if (!(set.uptime >= 0 && set.uptime <= 100)) errors.push('Uptime must be between 0 and 100'); }
+  if (has('algorithm')) { set.algorithm = body.algorithm; if (!POOL_ALGOS.includes(set.algorithm)) errors.push(`Algorithm must be one of ${POOL_ALGOS.join(', ')}`); }
+  if (body.coin !== undefined || body.supportedCoins !== undefined) {
+    const coins = (Array.isArray(body.supportedCoins) ? body.supportedCoins : [body.coin]).map((c) => String(c || '').toUpperCase()).filter(Boolean);
+    if (!coins.length || coins.some((c) => !POOL_COINS.includes(c))) errors.push(`Coin must be one of ${POOL_COINS.join(', ')}`);
+    else set.supportedCoins = [...new Set(coins)];
+  } else if (!partial) errors.push('Choose the coin this pool mines');
+  if (body.status !== undefined) { set.status = body.status; if (!POOL_STATUSES.includes(set.status)) errors.push('Status must be active, maintenance or offline'); }
+  if (body.location !== undefined) {
+    const loc = typeof body.location === 'string' ? { city: body.location } : body.location || {};
+    set.location = { city: String(loc.city || '').trim().slice(0, 60), country: String(loc.country || '').trim().slice(0, 60) };
+  }
+  return { set, errors };
+};
+
+const poolView = (pool) => {
+  const p = pool.toObject ? pool.toObject() : pool;
+  return {
+    id: p._id, name: p.name, url: p.url, fee: p.fee, minPayout: p.minPayout, miners: p.miners, hashRate: p.hashRate,
+    uptime: p.uptime, algorithm: p.algorithm, supportedCoins: p.supportedCoins, coin: p.supportedCoins?.[0] || '',
+    location: [p.location?.city, p.location?.country].filter(Boolean).join(', '), status: p.status, createdAt: p.createdAt, updatedAt: p.updatedAt
+  };
+};
+
+// Create mining pool
+export const createMiningPool = async (req, res) => {
+  try {
+    const { set, errors } = readPool(req.body);
+    if (errors.length) return fail(res, 400, errors.join('. '));
+    if (await MiningPool.exists({ name: set.name })) return fail(res, 409, 'A pool with this name already exists');
+    const pool = await MiningPool.create({ status: 'active', ...set });
+    res.status(201).json({ success: true, message: `${pool.name} created`, pool: poolView(pool) });
+  } catch (err) {
+    console.error('Create mining pool error:', err);
+    fail(res, 500, 'Failed to create mining pool');
+  }
+};
+
+// Update mining pool (only the fields above; nothing else can be overwritten)
 export const updateMiningPool = async (req, res) => {
   try {
-    const { id } = req.params;
-    const updates = req.body;
-    
-    const pool = await MiningPool.findById(id);
-    if (!pool) {
-      return res.status(404).json({
-        success: false,
-        error: 'Mining pool not found'
-      });
-    }
-    
-    // Validate fee if provided
-    if (updates.fee !== undefined && (updates.fee < 0 || updates.fee > 100)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Fee must be between 0 and 100'
-      });
-    }
-    
-    // Validate uptime if provided
-    if (updates.uptime !== undefined && (updates.uptime < 0 || updates.uptime > 100)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Uptime must be between 0 and 100'
-      });
-    }
-    
-    // Update pool
-    Object.keys(updates).forEach(key => {
-      pool[key] = updates[key];
-    });
-    
-    await pool.save();
-    
-    res.json({
-      success: true,
-      message: 'Mining pool updated successfully',
-      pool: {
-        id: pool._id,
-        name: pool.name,
-        fee: pool.fee,
-        uptime: pool.uptime,
-        status: pool.status,
-        updatedAt: pool.updatedAt
-      }
-    });
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return fail(res, 400, 'Invalid pool id');
+    const { set, errors } = readPool(req.body, { partial: true });
+    if (errors.length) return fail(res, 400, errors.join('. '));
+    if (set.name && await MiningPool.exists({ name: set.name, _id: { $ne: req.params.id } })) return fail(res, 409, 'A pool with this name already exists');
+    const pool = await MiningPool.findByIdAndUpdate(req.params.id, { $set: set }, { new: true, runValidators: true });
+    if (!pool) return fail(res, 404, 'Mining pool not found');
+    res.json({ success: true, message: `${pool.name} updated`, pool: poolView(pool) });
   } catch (err) {
     console.error('Update mining pool error:', err);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to update mining pool'
-    });
+    fail(res, 500, 'Failed to update mining pool');
+  }
+};
+
+// Delete mining pool (not while users are mining on it)
+export const deleteMiningPool = async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return fail(res, 400, 'Invalid pool id');
+    const running = await MiningSession.countDocuments({ poolId: req.params.id, status: 'active' });
+    if (running) {
+      return fail(res, 409, `${running} user${running === 1 ? ' is' : 's are'} mining on this pool right now. Set it to Maintenance or Offline instead, and delete it once their sessions end.`);
+    }
+    const pool = await MiningPool.findByIdAndDelete(req.params.id);
+    if (!pool) return fail(res, 404, 'Mining pool not found');
+    // Users who had this as their default pool fall back to the cheapest active pool.
+    await User.updateMany({ 'mining.defaultPool': pool._id }, { $unset: { 'mining.defaultPool': '' } });
+    res.json({ success: true, message: `${pool.name} deleted` });
+  } catch (err) {
+    console.error('Delete mining pool error:', err);
+    fail(res, 500, 'Failed to delete mining pool');
   }
 };
 

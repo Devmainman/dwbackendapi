@@ -12,6 +12,7 @@ import MiningEquipment from '../models/MiningEquipment.js';
 import User from '../models/User.js';
 import { round2, round8 } from '../utils/money.js';
 import { convertFromBase } from '../utils/wallet.js';
+import { rateBetween } from './fx.js';
 import { getUsdPrice, usdToCurrency } from './priceService.js';
 import { notifyUser } from './notificationService.js';
 
@@ -31,39 +32,72 @@ export const BOOSTER_CATALOG = {
 };
 
 /**
- * Catalog with the admin's overrides applied (Settings.miningCatalog):
- *   { equipment: { gpu_1: { price, dailyYieldPercent, enabled } }, boosters: { hash_boost: { price, multiplier, duration, enabled } } }
- * Disabled items are left out of the shop but existing machines keep earning.
+ * The shop the admin manages (Settings.miningCatalog), on top of the starter items above:
+ *   { equipment: { gpu_1: { price, dailyYieldPercent, name, ... , enabled, deleted }, custom_ab12: { custom: true, ...full item } },
+ *     boosters:  { hash_boost: { price, multiplier, ... }, ... } }
+ * Starter items can be edited, hidden (enabled: false) or removed (deleted: true).
+ * Items the admin adds are stored whole with custom: true.
+ * Hidden or removed items leave the shop, but machines users already own keep earning.
  */
 let catalogCache = null;
 export const invalidateCatalog = () => { catalogCache = null; };
+const REQUIRED = {
+  equipment: ['name', 'type', 'hashRate', 'powerConsumption', 'price', 'dailyYieldPercent'],
+  boosters: ['name', 'type', 'multiplier', 'duration', 'price']
+};
 export const getCatalog = async ({ includeDisabled = false } = {}) => {
   if (!catalogCache || Date.now() - catalogCache.at > 30e3) {
     const s = await Setting.findOne().select('miningCatalog').lean();
     const o = s?.miningCatalog || {};
-    const merge = (base, over) => Object.fromEntries(Object.entries(base).map(([id, t]) => [id, { ...t, enabled: true, ...(over?.[id] || {}) }]));
-    catalogCache = { at: Date.now(), equipment: merge(EQUIPMENT_CATALOG, o.equipment), boosters: merge(BOOSTER_CATALOG, o.boosters) };
+    const merge = (kind, base, over = {}) => {
+      const out = {};
+      for (const [id, t] of Object.entries(base)) out[id] = { ...t, enabled: true, ...(over[id] || {}) };
+      for (const [id, t] of Object.entries(over)) {
+        if (base[id] || !t?.custom) continue;
+        if (REQUIRED[kind].every((k) => t[k] !== undefined && t[k] !== '')) out[id] = { enabled: true, ...t };
+      }
+      for (const [id, t] of Object.entries(out)) {
+        if (t.deleted) delete out[id];
+        else if (kind === 'equipment' && !t.efficiency && t.hashRate > 0) t.efficiency = round2(t.powerConsumption / t.hashRate);
+      }
+      return out;
+    };
+    catalogCache = { at: Date.now(), equipment: merge('equipment', EQUIPMENT_CATALOG, o.equipment), boosters: merge('boosters', BOOSTER_CATALOG, o.boosters) };
   }
   const pick = (m) => (includeDisabled ? m : Object.fromEntries(Object.entries(m).filter(([, t]) => t.enabled !== false)));
   return { equipment: pick(catalogCache.equipment), boosters: pick(catalogCache.boosters) };
 };
 
 const DEFAULT_POOLS = [
-  { name: 'Atlas BTC Pool', url: 'stratum+tcp://btc.atlaspool.example:3333', fee: 1.5, minPayout: 0.001, algorithm: 'SHA-256', supportedCoins: ['BTC'], paymentMethod: 'PPS', location: 'Global', status: 'active' },
-  { name: 'Nova ETC Pool', url: 'stratum+tcp://etc.novapool.example:4444', fee: 1, minPayout: 0.05, algorithm: 'Ethash', supportedCoins: ['ETC'], paymentMethod: 'PPLNS', location: 'EU', status: 'active' },
-  { name: 'Lumen LTC Pool', url: 'stratum+tcp://ltc.lumenpool.example:3333', fee: 2, minPayout: 0.01, algorithm: 'Scrypt', supportedCoins: ['LTC'], paymentMethod: 'PPS', location: 'US', status: 'active' }
+  { name: 'Atlas BTC Pool', url: 'stratum+tcp://btc.atlaspool.example:3333', fee: 1.5, minPayout: 0.001, algorithm: 'SHA-256', supportedCoins: ['BTC'], paymentMethod: 'PPS', location: { city: 'Global' }, status: 'active' },
+  { name: 'Nova ETC Pool', url: 'stratum+tcp://etc.novapool.example:4444', fee: 1, minPayout: 0.05, algorithm: 'Ethash', supportedCoins: ['ETC'], paymentMethod: 'PPLNS', location: { country: 'EU' }, status: 'active' },
+  { name: 'Lumen LTC Pool', url: 'stratum+tcp://ltc.lumenpool.example:3333', fee: 2, minPayout: 0.01, algorithm: 'Scrypt', supportedCoins: ['LTC'], paymentMethod: 'PPS', location: { country: 'US' }, status: 'active' }
 ];
 
+/**
+ * Starter pools are added once, on a brand-new platform. After that the admin owns
+ * the list: pools they delete stay deleted, even if they delete them all.
+ */
+let poolsSeeded = false;
 export const ensureDefaultPools = async () => {
-  if (await MiningPool.exists({})) return;
-  await MiningPool.insertMany(DEFAULT_POOLS);
+  if (poolsSeeded) return;
+  const s = await Setting.findOne().select('miningCatalog.poolsSeeded').lean();
+  if (!s?.miningCatalog?.poolsSeeded) {
+    if (!(await MiningPool.exists({}))) await MiningPool.insertMany(DEFAULT_POOLS);
+    await Setting.updateOne({}, { $set: { 'miningCatalog.poolsSeeded': true } }, { upsert: true });
+  }
+  poolsSeeded = true;
 };
 
 /** Daily earnings of one machine in the user's currency. */
 export const machineDailyYield = async (eq, currency) => {
-  if (eq.metadata?.dailyYield && eq.metadata?.currency === currency) return eq.metadata.dailyYield;
+  // A machine keeps the yield it was bought with, whatever the admin later changes in the shop.
+  if (eq.metadata?.dailyYield) {
+    if (!eq.metadata.currency || eq.metadata.currency === currency) return eq.metadata.dailyYield;
+    return round2(eq.metadata.dailyYield * (await rateBetween(eq.metadata.currency, currency)));
+  }
   const { equipment: cat } = await getCatalog({ includeDisabled: true });
-  const tpl = Object.values(cat).find((t) => t.name === eq.name);
+  const tpl = cat[eq.metadata?.catalogId] || Object.values(cat).find((t) => t.name === eq.name);
   const pct = tpl?.dailyYieldPercent ?? 0.3;
   if (eq.metadata?.priceLocal) return round2(eq.metadata.priceLocal * (pct / 100));
   const { amount } = await convertFromBase(eq.purchasePrice || tpl?.price || 0, currency);
@@ -89,7 +123,13 @@ export const sessionEarnings = async (session, until = new Date()) => {
     if (to > from) earned += perSecond * ((to - from) / 1000) * Math.max(0, (b.multiplier || 1) - 1);
   }
   const fee = (session.metadata?.poolFee || 0) / 100;
-  return { gross: round2(earned), net: round2(earned * (1 - fee)), seconds };
+  // Rate right now (boosters running at `until`), for live counters between refreshes.
+  const at = until.getTime();
+  const boostNow = end >= at ? boosters
+    .filter((b) => new Date(b.activatedAt).getTime() <= at && new Date(b.expiresAt).getTime() > at)
+    .reduce((m, b) => m + Math.max(0, (b.multiplier || 1) - 1), 0) : -1;
+  const ratePerSecond = boostNow < 0 ? 0 : perSecond * (1 + boostNow) * (1 - fee);
+  return { gross: round2(earned), net: round2(earned * (1 - fee)), netExact: Math.round(earned * (1 - fee) * 1e6) / 1e6, ratePerSecond, seconds };
 };
 
 /** Finish a session: record its reward (pending until claimed). Safe to call twice. */
