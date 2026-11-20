@@ -8,6 +8,8 @@ import { finishExpiredSessions } from './miningEngine.js';
 import { refreshMarkPrices } from './markPriceFeed.js';
 import { syncIfDue } from './fx.js';
 import { checkStops } from '../controllers/marketTradingController.js';
+import { refreshStockPrices } from './stockPrices.js';
+import { runTraderAutopilots } from './traderAutopilot.js';
 
 const safe = (name, fn) => fn().catch((err) => { console.warn(`[jobs] ${name} failed:`, err.message); return null; });
 
@@ -25,7 +27,9 @@ export const runDueJobs = () => {
       safe('mining sessions', finishExpiredSessions),
       safe('copy-trading prices', refreshMarkPrices),
       safe('fx sync', syncIfDue),
-      safe('ai smart trader', runDueBotTrades)
+      safe('ai smart trader', runDueBotTrades),
+      safe('stock prices', refreshStockPrices),
+      safe('copy-trading autopilot', runTraderAutopilots)
     ]);
     lastRun = Date.now();
     return { trades, stops, mining, ms: lastRun - started };

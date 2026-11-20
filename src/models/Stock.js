@@ -18,6 +18,13 @@ const stockAssetSchema = new mongoose.Schema({
     at: { type: Date, default: Date.now }
   }],
   feePercent: { type: Number, default: 0.5, min: 0, max: 10 },
+  // 'live' = price follows the real market (services/stockPrices.js); 'manual' = the admin sets it.
+  priceSource: { type: String, enum: ['live', 'manual'], default: 'live' },
+  quoteCurrency: { type: String, default: 'USD' },  // currency of the market quote before conversion
+  dayHigh: { type: Number, default: 0 },
+  dayLow: { type: Number, default: 0 },
+  lastPriceAt: { type: Date },
+  priceError: { type: String, default: '' },
   isActive: { type: Boolean, default: true, index: true }
 }, { timestamps: true });
 

@@ -18,6 +18,8 @@ const masterTradeSchema = new mongoose.Schema({
   allocationPercent: { type: Number, required: true, min: 0.1, max: 100, default: 10 },
   leverage: { type: Number, min: 1, max: 100, default: 1 },
   status: { type: String, enum: ['open', 'closed', 'cancelled'], default: 'open', index: true },
+  source: { type: String, enum: ['manual', 'auto'], default: 'manual' },   // placed by the admin or by the autopilot
+  closeReason: { type: String, default: '' },                                 // e.g. take_profit, stop_loss, max_hold, signal, manual
   pnlPercent: { type: Number, default: 0 },    // on margin (leveraged), set at close
   copiedCount: { type: Number, default: 0 },
   notes: { type: String, trim: true, maxlength: 500, default: '' },

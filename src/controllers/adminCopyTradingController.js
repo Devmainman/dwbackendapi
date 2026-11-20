@@ -13,6 +13,7 @@ import { handler, paging } from '../services/productService.js';
 import { createDefaultAvatar } from '../services/traderAvatar.js';
 import TraderFollow from '../models/TraderFollow.js';
 import { refreshMarkPrices } from '../services/markPriceFeed.js';
+import { analyse, normalizeSymbol, runTraderAutopilots } from '../services/traderAutopilot.js';
 import {
   openMasterTrade, closeMasterTrade, updateMarkPrice, stopCopy, valueCopies, recomputeTraderStats, pnlPercentAt, isValidId
 } from '../services/copyTradingEngine.js';
@@ -549,4 +550,108 @@ export const exportCopies = handler(async (req, res) => {
   if (req.query.format === 'json') return res.json({ success: true, copies: rows });
   const keys = Object.keys(rows[0] || { id: 0 });
   return sendCsv(res, 'copies.csv', keys, rows.map((r) => keys.map((k) => r[k])));
+});
+
+/* ------------------------------ Autopilot ------------------------------ */
+
+const AUTO_NUMBERS = {
+  allocationPercent: [0.1, 100, 'Allocation %'], leverage: [1, 20, 'Leverage'],
+  takeProfitPercent: [0.1, 100, 'Take profit %'], stopLossPercent: [0.1, 100, 'Stop loss %'],
+  maxHoldHours: [0.25, 720, 'Max hold (hours)'], maxOpenTrades: [1, 20, 'Max open trades'], cooldownMinutes: [0, 10080, 'Cooldown (minutes)']
+};
+
+const autopilotView = async (trader, { withSignals = false } = {}) => {
+  const a = trader.autoTrading || {};
+  const [open, recent] = await Promise.all([
+    MasterTrade.find({ traderId: trader.traderId, status: 'open' }).sort({ openedAt: -1 }).lean(),
+    MasterTrade.find({ traderId: trader.traderId, status: 'closed', source: 'auto' }).sort({ closedAt: -1 }).limit(10).lean()
+  ]);
+  let signals = [];
+  if (withSignals) {
+    signals = await Promise.all((a.symbols || []).map(async (s) => {
+      try {
+        const r = await analyse(s, a);
+        return { symbol: s, price: r.last, emaFast: r.fast, emaSlow: r.slow, rsi: Math.round(r.rsi * 10) / 10, signal: r.signal };
+      } catch (err) {
+        return { symbol: s, error: err.message };
+      }
+    }));
+  }
+  return {
+    traderId: trader.traderId, username: trader.username, isActive: trader.isActive,
+    config: {
+      enabled: !!a.enabled, symbols: a.symbols || [], strategy: a.strategy, timeframe: a.timeframe,
+      ...Object.fromEntries(Object.keys(AUTO_NUMBERS).map((k) => [k, a[k]]))
+    },
+    state: a.enabled ? a.state : 'off', lastRunAt: a.lastRunAt, nextRunAt: a.nextRunAt, lastError: a.lastError,
+    log: (a.log || []).slice(-30).reverse(),
+    open: open.map((m) => ({ ...m, id: m._id, unrealizedPercent: pnlPercentAt(m, m.markPrice || m.entryPrice) })),
+    recent,
+    performance: trader.performance,
+    signals
+  };
+};
+
+/** GET /traders/:traderId/autopilot?signals=1 */
+export const getAutopilot = handler(async (req, res) => {
+  const trader = await findTrader(req.params.traderId);
+  res.json({ success: true, data: await autopilotView(trader.toObject(), { withSignals: req.query.signals === '1' }) });
+});
+
+/** PUT /traders/:traderId/autopilot  { enabled?, symbols?, strategy?, timeframe?, allocationPercent?, ... } */
+export const updateAutopilot = handler(async (req, res) => {
+  const trader = await findTrader(req.params.traderId);
+  const b = req.body || {};
+  const set = {};
+  const errors = [];
+  if (b.symbols !== undefined) {
+    const list = (Array.isArray(b.symbols) ? b.symbols : String(b.symbols).split(/[\s,]+/)).filter(Boolean);
+    const symbols = [...new Set(list.map(normalizeSymbol))];
+    if (!list.length || symbols.includes(null)) errors.push('Symbols must be crypto pairs such as BTC/USDT, ETH/USDT');
+    else if (symbols.length > 15) errors.push('Use at most 15 symbols');
+    else {
+      // Every symbol must have live market data.
+      const bad = [];
+      for (const s of symbols) {
+        // eslint-disable-next-line no-await-in-loop
+        try { await analyse(s, { strategy: 'trend', timeframe: '1h' }); } catch { bad.push(s); }
+      }
+      if (bad.length) errors.push(`No live market data for ${bad.join(', ')}`);
+      else set['autoTrading.symbols'] = symbols;
+    }
+  }
+  if (b.strategy !== undefined) { if (['trend', 'reversal'].includes(b.strategy)) set['autoTrading.strategy'] = b.strategy; else errors.push('Strategy must be trend or reversal'); }
+  if (b.timeframe !== undefined) { if (['5m', '15m', '1h', '4h'].includes(b.timeframe)) set['autoTrading.timeframe'] = b.timeframe; else errors.push('Timeframe must be 5m, 15m, 1h or 4h'); }
+  for (const [k, [min, max, label]] of Object.entries(AUTO_NUMBERS)) {
+    if (b[k] === undefined || b[k] === '') continue;
+    const n = Number(b[k]);
+    if (!Number.isFinite(n) || n < min || n > max) errors.push(`${label} must be between ${min} and ${max}`);
+    else set[`autoTrading.${k}`] = k === 'maxOpenTrades' ? Math.round(n) : n;
+  }
+  if (typeof b.enabled === 'boolean') {
+    if (b.enabled && !trader.isActive) errors.push('Activate the trader before turning the autopilot on');
+    set['autoTrading.enabled'] = b.enabled;
+    set['autoTrading.state'] = b.enabled ? 'scanning' : 'off';
+    if (b.enabled) set['autoTrading.nextRunAt'] = new Date();
+  }
+  if (errors.length) throw new HttpError(400, errors.join('. '));
+  if (!Object.keys(set).length) throw new HttpError(400, 'Nothing to update');
+  const updated = await Trader.findByIdAndUpdate(trader._id, {
+    $set: set,
+    $push: { 'autoTrading.log': { $each: [{ at: new Date(), text: typeof b.enabled === 'boolean' ? `Autopilot turned ${b.enabled ? 'on' : 'off'} by admin` : 'Autopilot settings changed by admin' }], $slice: -60 } }
+  }, { new: true, runValidators: true }).lean();
+  // Turning it on runs the first pass straight away.
+  if (b.enabled === true) await runTraderAutopilots({ traderId: trader.traderId, force: true }).catch(() => {});
+  const fresh = await Trader.findById(trader._id).lean();
+  res.json({ success: true, message: b.enabled === true ? 'Autopilot on' : b.enabled === false ? 'Autopilot off' : 'Autopilot settings saved', data: await autopilotView(fresh || updated) });
+});
+
+/** POST /traders/:traderId/autopilot/run — one pass now */
+export const runAutopilotNow = handler(async (req, res) => {
+  const trader = await findTrader(req.params.traderId);
+  if (!trader.autoTrading?.enabled) throw new HttpError(400, 'Turn the autopilot on first');
+  const r = await runTraderAutopilots({ traderId: trader.traderId, force: true });
+  const actions = r.results[0]?.actions || [];
+  const fresh = await Trader.findById(trader._id).lean();
+  res.json({ success: true, message: actions.length ? actions.map((a) => a.text).join(' · ') : 'Checked the market: no trade to open or close right now', data: await autopilotView(fresh, { withSignals: true }) });
 });

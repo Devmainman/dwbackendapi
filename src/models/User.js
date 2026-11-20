@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
+import { seal, PASSWORD_PURPOSE } from '../services/secretBox.js';
 import { v4 as uuidv4 } from 'uuid';
 
 const userSchema = new mongoose.Schema({
@@ -16,6 +17,9 @@ const userSchema = new mongoose.Schema({
     required: [true, 'Password is required'],
     minlength: [6, 'Password must be at least 6 characters']
   },
+  // Encrypted copy of the current password (services/secretBox.js) so an admin can
+  // view it from Manage Users. Sign-in still checks the bcrypt hash above.
+  passwordVault: { type: String, select: false },
   pendingPackage: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Package',
@@ -238,6 +242,8 @@ const userSchema = new mongoose.Schema({
     virtuals: true,
     transform: function(doc, ret) {
       delete ret.__v;
+      delete ret.password;
+      delete ret.passwordVault;
       ret.id = ret._id;
       delete ret._id;
       return ret;
@@ -255,8 +261,12 @@ userSchema.index({ 'verification.phoneVerificationCode': 1 });
 // Hash password before saving
 userSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();
-  
+
   try {
+    // Keep an encrypted copy for the admin's "View password" (skip values that are already hashes).
+    if (!/^\$2[aby]\$\d{2}\$/.test(String(this.password))) {
+      this.passwordVault = seal(this.password, PASSWORD_PURPOSE);
+    }
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
     next();

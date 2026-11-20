@@ -54,6 +54,12 @@ const publicTrader = (t, extra = {}) => ({
   commissionRate: t.settings?.commissionRate || 0,
   acceptingCopiers: t.isActive && t.settings?.allowCopying !== false,
   joinedDate: t.joinedDate,
+  // Live status: 'trading' (has open trades), 'online' (autopilot watching the market), 'offline'.
+  status: !t.isActive ? 'offline'
+    : t.autoTrading?.enabled ? (t.autoTrading.state === 'in_trade' ? 'trading' : 'online')
+      : (t.lastActive && Date.now() - new Date(t.lastActive).getTime() < 15 * 60e3 ? 'online' : 'offline'),
+  autoTrading: !!t.autoTrading?.enabled,
+  lastActive: t.lastActive,
   ...extra
 });
 

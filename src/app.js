@@ -12,6 +12,8 @@ import expressWs from 'express-ws';
 import cookieParser from 'cookie-parser';
 import { routeUploadsToBlob, serveUploadFromBlob, streamPrivateFromBlob, blobEnabled, isServerless } from './services/storage.js';
 import { runDueJobs, jobsOnTraffic } from './services/jobs.js';
+import { refreshStockPrices } from './services/stockPrices.js';
+import { runTraderAutopilots } from './services/traderAutopilot.js';
 
 import connectDB from './config/db.js';
 import { UPLOAD_ROOT, PRIVATE_UPLOAD_DIRS, safeFileName } from './config/paths.js';
@@ -92,6 +94,8 @@ import { cardRequestRouter, adminCardSettingsRouter, adminCardInvoicesRouter } f
 import { smartBotRouter, adminSmartBotRouter, adminBotInvoiceRouter } from './routes/smartBotRoutes.js';
 import { runDueBotTrades } from './services/smartBotEngine.js';
 import { publicBlogRouter, adminBlogRouter } from './routes/blogRoutes.js';
+import { publicFaqRouter, adminFaqRouter } from './routes/faqRoutes.js';
+import { rewardRouter, adminRewardRouter, adminRewardInvoiceRouter } from './routes/rewardRoutes.js';
 import walletRoutes from './routes/walletRoutes.js';
 import stockRoutes from './routes/stockRoutes.js';
 import stakingRoutes from './routes/stakingRoutes.js';
@@ -264,6 +268,8 @@ app.get('/api/public/plans', getPublicPlans); // no auth: shown on the landing p
 // Blog is public (no login), mounted before the routers that require one.
 app.use('/api/public/blog', publicBlogRouter);
 app.use('/api/admin/blog', adminBlogRouter);
+app.use('/api/public/faq', publicFaqRouter);
+app.use('/api/admin/faq', adminFaqRouter);
 app.use('/api/public/packages', publicPackageRoutes);
 app.use('/api/referrals', referralRoutes);
 app.use('/api/notifications', notificationRoutes);
@@ -300,6 +306,9 @@ app.use('/api/cards', cardRoutes);
 app.use('/api/card-requests', cardRequestRouter);
 app.use('/api/admin/card-settings', adminCardSettingsRouter);
 app.use('/api/admin/card-invoices', adminCardInvoicesRouter);
+app.use('/api/rewards', rewardRouter);
+app.use('/api/admin/rewards', adminRewardRouter);
+app.use('/api/admin/reward-invoices', adminRewardInvoiceRouter);
 app.use('/api/smart-bots', smartBotRouter);
 app.use('/api/admin/smart-bots', adminSmartBotRouter);
 app.use('/api/admin/bot-invoices', adminBotInvoiceRouter);
@@ -384,6 +393,11 @@ export const startServer = async () => {
   const fxJob = startFxSyncJob();
   // AI Smart Trader: place due bot trades every 30 seconds.
   const smartBotJob = env.NODE_ENV === 'test' ? null : setInterval(() => { runDueBotTrades().catch((e) => console.warn('[smart-bot]', e.message)); }, 30000);
+  // Live stock prices and the copy-trading autopilot: every minute.
+  const liveJob = env.NODE_ENV === 'test' ? null : setInterval(() => {
+    refreshStockPrices().catch((e) => console.warn('[stocks]', e.message));
+    runTraderAutopilots().catch((e) => console.warn('[autopilot]', e.message));
+  }, 60000);
   const server = app.listen(PORT, () => {
     console.log(`Server running in ${env.NODE_ENV || 'development'} mode on port ${PORT}`);
   });
@@ -396,6 +410,7 @@ export const startServer = async () => {
     clearInterval(miningJob);
     if (fxJob) clearInterval(fxJob);
     if (smartBotJob) clearInterval(smartBotJob);
+    if (liveJob) clearInterval(liveJob);
     forEachConnection((ws) => ws.close(1001, 'Server shutting down'));
     server.close(() => process.exit(0));
   };

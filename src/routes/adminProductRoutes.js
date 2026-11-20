@@ -8,7 +8,7 @@ import { adminListVaults, adminUpdateVault } from '../controllers/coldStorageCon
 import { adminListCards, adminApproveCard, adminRejectCard, adminSetCardStatus } from '../controllers/cardController.js';
 import { adminListWallets } from '../controllers/walletController.js';
 import {
-  adminListStocks, adminCreateStock, adminUpdateStock, adminBulkPrices, adminListHoldings
+  adminListStocks, adminCreateStock, adminUpdateStock, adminBulkPrices, adminRefreshStocks, adminInstallPopular, adminListHoldings
 } from '../controllers/stockController.js';
 import {
   adminListPlans, adminCreatePlan, adminUpdatePlan, adminDeletePlan, adminListPositions
@@ -62,6 +62,8 @@ router.get('/wallets', adminListWallets);
 router.get('/stocks', adminListStocks);
 router.post('/stocks', adminCreateStock);
 router.post('/stocks/prices', adminBulkPrices);
+router.post('/stocks/refresh', adminRefreshStocks);
+router.post('/stocks/install-popular', adminInstallPopular);
 router.put('/stocks/:id', adminUpdateStock);
 router.get('/stock-holdings', adminListHoldings);
 

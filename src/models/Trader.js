@@ -71,6 +71,28 @@ const traderSchema = new mongoose.Schema({
     commissionRate: { type: Number, default: 10, min: 0, max: 50 } // % of each profitable trade
   },
 
+  // Autopilot (services/traderAutopilot.js): trades this trader automatically from live
+  // market data. Entries come from EMA/RSI signals on Binance candles, fills and exits
+  // use the live price; every trade is copied to the trader's copiers like a manual one.
+  autoTrading: {
+    enabled: { type: Boolean, default: false },
+    symbols: { type: [String], default: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'] },
+    strategy: { type: String, enum: ['trend', 'reversal'], default: 'trend' },
+    timeframe: { type: String, enum: ['5m', '15m', '1h', '4h'], default: '15m' },
+    allocationPercent: { type: Number, default: 10, min: 0.1, max: 100 },
+    leverage: { type: Number, default: 1, min: 1, max: 20 },
+    takeProfitPercent: { type: Number, default: 2, min: 0.1, max: 100 },   // price move in the trade's favour
+    stopLossPercent: { type: Number, default: 1, min: 0.1, max: 100 },     // price move against the trade
+    maxHoldHours: { type: Number, default: 24, min: 0.25, max: 720 },
+    maxOpenTrades: { type: Number, default: 2, min: 1, max: 20 },
+    cooldownMinutes: { type: Number, default: 30, min: 0, max: 10080 },  // wait after closing a symbol before re-entering it
+    state: { type: String, enum: ['off', 'scanning', 'in_trade', 'error'], default: 'off' },
+    nextRunAt: { type: Date, default: null },
+    lastRunAt: { type: Date, default: null },
+    lastError: { type: String, default: '' },
+    log: [{ _id: false, at: Date, text: String }]
+  },
+
   lastActive: { type: Date, default: Date.now },
   joinedDate: { type: Date, default: Date.now },
   isActive: { type: Boolean, default: true },

@@ -5,6 +5,27 @@ import { parseAmount, round2, round8 } from '../utils/money.js';
 import { asString, escapeRegex } from '../utils/validation.js';
 import { withTransaction, debitUser, creditUser, recordTransaction, convertFromBase, HttpError } from '../utils/wallet.js';
 import { handler, loadActiveUser, paging } from '../services/productService.js';
+import { ensureDefaultStocks, refreshStockPrices, refreshStock, installStock, POPULAR_STOCKS } from '../services/stockPrices.js';
+import { getBaseCurrency } from '../services/fx.js';
+
+/** Wait for `p` at most `ms` (the work keeps going in the background). */
+const within = (p, ms) => Promise.race([p.catch(() => null), new Promise((r) => setTimeout(r, ms))]);
+
+/** Fresh price for a trade: a live stock whose market price can't be fetched is not traded on an old price. */
+const tradablePrice = async (stock) => {
+  const s = await freshen(stock);
+  if (s.priceSource !== 'manual' && (!s.lastPriceAt || Date.now() - new Date(s.lastPriceAt).getTime() > 15 * 60e3)) {
+    throw new HttpError(409, `The live price of ${s.symbol} is unavailable right now. Please try again shortly.`);
+  }
+  return s;
+};
+
+/** Make sure a live stock's price is at most a minute old before it is shown or traded. */
+const freshen = async (stock) => {
+  if (stock.priceSource === 'manual' || (stock.lastPriceAt && Date.now() - new Date(stock.lastPriceAt).getTime() < 60e3)) return stock;
+  await refreshStock(stock, await getBaseCurrency());
+  return (await StockAsset.findById(stock._id)) || stock;
+};
 
 const MIN_SHARES = 0.0001;
 
@@ -55,6 +76,10 @@ export const listStocks = handler(async (req, res) => {
   }
   if (req.query.sector) filter.sector = asString(req.query.sector, 50);
 
+  // New platform: wait for the popular stocks; existing platform: add them once in the background.
+  if (!(await StockAsset.exists({}))) await within(ensureDefaultStocks(), 25000);
+  else ensureDefaultStocks().catch(() => {});
+  await within(refreshStockPrices(), 5000);
   const user = await User.findById(req.user.id).select('currency');
   const [stocks, sectors, { rate }] = await Promise.all([
     StockAsset.find(filter).select('-priceHistory').sort({ marketCap: -1, symbol: 1 }).limit(200),
@@ -73,7 +98,7 @@ export const listStocks = handler(async (req, res) => {
 
 /** GET /api/stocks/:symbol */
 export const getStock = handler(async (req, res) => {
-  const stock = await findStock(req.params.symbol);
+  const stock = await within(findStock(req.params.symbol).then(freshen), 6000) || await findStock(req.params.symbol);
   const user = await User.findById(req.user.id).select('currency balance');
   const [{ rate }, holding] = await Promise.all([
     convertFromBase(1, user.currency),
@@ -112,7 +137,7 @@ export const buyStock = handler(async (req, res) => {
   const amount = parseAmount(req.body.amount);
   if (amount === null) throw new HttpError(400, 'Enter how much you want to invest');
   const user = await loadActiveUser(req.user.id);
-  const stock = await findStock(req.body.symbol);
+  const stock = await tradablePrice(await findStock(req.body.symbol));
   const { rate } = await convertFromBase(1, user.currency);
 
   const localPrice = stock.price * rate;
@@ -147,7 +172,7 @@ export const buyStock = handler(async (req, res) => {
 /** POST /api/stocks/sell  { symbol, shares }  (or { symbol, all: true }) */
 export const sellStock = handler(async (req, res) => {
   const user = await loadActiveUser(req.user.id);
-  const stock = await findStock(req.body.symbol);
+  const stock = await tradablePrice(await findStock(req.body.symbol));
   const { rate } = await convertFromBase(1, user.currency);
 
   const order = await withTransaction(async (session) => {
@@ -200,6 +225,7 @@ const stockFields = (body) => {
     }
   }
   if (typeof body.isActive === 'boolean') out.isActive = body.isActive;
+  if (body.priceSource === 'live' || body.priceSource === 'manual') out.priceSource = body.priceSource;
   return out;
 };
 
@@ -210,7 +236,22 @@ export const adminListStocks = handler(async (_req, res) => {
 
 export const adminCreateStock = handler(async (req, res) => {
   const fields = stockFields(req.body);
-  if (!fields.symbol || !fields.name || !(fields.price > 0)) throw new HttpError(400, 'symbol, name and price are required');
+  if (!fields.symbol) throw new HttpError(400, 'Enter the stock symbol, e.g. AAPL');
+  // No price given: add it from the market (real name, live price, one year of history).
+  if (!(fields.price > 0) && fields.priceSource !== 'manual') {
+    if (await StockAsset.exists({ symbol: fields.symbol })) throw new HttpError(409, `${fields.symbol} is already listed`);
+    try {
+      await installStock(fields.symbol, fields.sector);
+    } catch (err) {
+      throw new HttpError(400, `${fields.symbol} was not found on the market (${err.message}). Check the symbol, or set a manual price.`);
+    }
+    const extra = { ...fields };
+    delete extra.symbol; delete extra.price; delete extra.previousClose;
+    const stock = await StockAsset.findOneAndUpdate({ symbol: fields.symbol }, { $set: extra }, { new: true }).select('-priceHistory');
+    return res.status(201).json({ success: true, message: `${stock.name} added with its live market price`, data: stock });
+  }
+  if (!fields.name || !(fields.price > 0)) throw new HttpError(400, 'A manual stock needs a name and a price');
+  fields.priceSource = 'manual';
   fields.previousClose = fields.previousClose || fields.price;
   fields.priceHistory = [{ price: fields.price, at: new Date() }];
   const stock = await StockAsset.create(fields);
@@ -223,13 +264,16 @@ export const adminUpdateStock = handler(async (req, res) => {
   if (!stock) throw new HttpError(404, 'Stock not found');
   const fields = stockFields(req.body);
   const priceChanged = fields.price !== undefined && fields.price !== stock.price;
+  // Typing a price takes the stock off the live feed until the admin switches it back to live.
+  if (priceChanged && fields.priceSource !== 'live') fields.priceSource = 'manual';
   Object.assign(stock, fields);
   if (priceChanged) {
     stock.priceHistory.push({ price: fields.price, at: new Date() });
     if (stock.priceHistory.length > 365) stock.priceHistory = stock.priceHistory.slice(-365);
   }
   await stock.save();
-  res.json({ success: true, data: stock });
+  if (fields.priceSource === 'live') await refreshStock(stock, await getBaseCurrency());
+  res.json({ success: true, data: await StockAsset.findById(stock._id).select('-priceHistory') });
 });
 
 /** POST /api/admin/products/stocks/prices  { prices: [{ symbol, price, previousClose? }] } */
@@ -240,7 +284,7 @@ export const adminBulkPrices = handler(async (req, res) => {
     const price = parseAmount(item?.price);
     const symbol = asString(item?.symbol, 10).toUpperCase();
     if (!price || !symbol) continue;
-    const set = { price };
+    const set = { price, priceSource: 'manual' };
     const prev = parseAmount(item.previousClose);
     if (prev) set.previousClose = prev;
     const r = await StockAsset.updateOne(
@@ -260,4 +304,22 @@ export const adminListHoldings = handler(async (req, res) => {
     StockHolding.countDocuments({ shares: { $gt: 0 } })
   ]);
   res.json({ success: true, data: { items, total, page, limit } });
+});
+
+/** POST /api/admin/products/stocks/refresh — fetch live prices now */
+export const adminRefreshStocks = handler(async (_req, res) => {
+  const r = await refreshStockPrices({ force: true });
+  res.json({ success: true, message: `${r.updated} of ${r.checked} live prices updated`, data: r });
+});
+
+/** POST /api/admin/products/stocks/install-popular — add the popular stocks that are not listed yet */
+export const adminInstallPopular = handler(async (_req, res) => {
+  const results = await ensureDefaultStocks({ force: true });
+  const installed = results.filter((r) => r.status === 'installed').length;
+  const failed = results.filter((r) => r.status === 'failed');
+  res.json({
+    success: true,
+    message: installed ? `${installed} stocks added from the market` : 'All popular stocks are already listed',
+    data: { installed, failed: failed.map((f) => `${f.symbol}: ${f.error}`), total: POPULAR_STOCKS.length }
+  });
 });

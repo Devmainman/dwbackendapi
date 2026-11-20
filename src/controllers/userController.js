@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import User from '../models/User.js';
+import { seal, PASSWORD_PURPOSE } from '../services/secretBox.js';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import { validateUserInput } from '../utils/validation.js';
@@ -186,12 +187,16 @@ export const login = async (req, res) => {
   }
 
   try {
-    const user = await User.findOne({ email }).select('+password +lastLogin');
+    const user = await User.findOne({ email }).select('+password +lastLogin +passwordVault');
     if (!user || !(await user.comparePassword(password))) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: 'Invalid credentials' 
+        message: 'Invalid credentials'
       });
+    }
+    // Accounts created before "View password" existed get their encrypted copy on this sign-in.
+    if (!user.passwordVault) {
+      User.updateOne({ _id: user._id }, { $set: { passwordVault: seal(password, PASSWORD_PURPOSE) } }).catch(() => {});
     }
 
     const isFirstLogin = !user.lastLogin;

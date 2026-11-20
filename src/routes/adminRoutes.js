@@ -28,7 +28,7 @@ import {
 } from '../controllers/adminUserController.js';
 
 import { assignPackage, editUserPackage, unassignPackage } from '../controllers/adminAssignPackage.js';
-import { userStats, bulkStatus, bulkDelete, bulkNotify, userOverview } from '../controllers/adminUserExtras.js';
+import { userStats, bulkStatus, bulkDelete, bulkNotify, userOverview, viewUserPassword, clearUserAccount } from '../controllers/adminUserExtras.js';
 // main
 import { getBrowsingHistory, getSessionDetails } from '../controllers/browsingHistoryController.js';
 import { 
@@ -68,6 +68,8 @@ router.patch('/users/bulk-status', bulkStatus);
 router.post('/users/bulk-delete', bulkDelete);
 router.post('/users/bulk-notify', bulkNotify);
 router.get('/users/:id/overview', userOverview);
+router.get('/users/:id/password', viewUserPassword);
+router.post('/users/:id/clear-account', clearUserAccount);
 router.get('/users/simple-list', getSimpleUserList);
 router.get('/users/:id', getUser);
 router.put('/users/:id', updateUser);

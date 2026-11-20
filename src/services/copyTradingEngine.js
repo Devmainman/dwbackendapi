@@ -444,8 +444,9 @@ export const closePositionEarly = async (userId, positionId) => {
 /* ------------------------------------------------------------------ */
 
 /** Open a master trade and mirror it into every active copy. */
-export const openMasterTrade = async (trader, { symbol, side, entryPrice, allocationPercent = 10, leverage = 1, notes = '' }) => {
+export const openMasterTrade = async (trader, { symbol, side, entryPrice, allocationPercent = 10, leverage = 1, notes = '', source = 'manual' }) => {
   const master = await MasterTrade.create({
+    source,
     trader: trader._id,
     traderId: trader.traderId,
     symbol,
@@ -499,7 +500,7 @@ export const updateMarkPrice = async ({ masterTradeId, traderId, symbol, price }
 };
 
 /** Close a master trade and settle every copied position at the same price. */
-export const closeMasterTrade = async (masterId, exitPrice, { cancel = false } = {}) => {
+export const closeMasterTrade = async (masterId, exitPrice, { cancel = false, reason = '' } = {}) => {
   const existing = await MasterTrade.findOne({ _id: masterId, status: 'open' });
   if (!existing) throw new HttpError(404, 'Open trade not found');
   const price = cancel ? existing.entryPrice : exitPrice;
@@ -511,6 +512,7 @@ export const closeMasterTrade = async (masterId, exitPrice, { cancel = false } =
         exitPrice: price,
         markPrice: price,
         pnlPercent: cancel ? 0 : pnlPercentAt(existing, price),
+        closeReason: cancel ? 'cancelled' : (reason || 'manual'),
         closedAt: new Date()
       }
     },

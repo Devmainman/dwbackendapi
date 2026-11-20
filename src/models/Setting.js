@@ -20,6 +20,16 @@ const settingSchema = new mongoose.Schema({
   currencyLastSyncedAt: { type: Date },
   currencyRateSource: { type: String, default: '' },
   miningCatalog: { type: mongoose.Schema.Types.Mixed, default: {} },
+  // One-time setup markers (e.g. { stocksSeeded: true }).
+  flags: { type: mongoose.Schema.Types.Mixed, default: {} },
+  // Trader reward program (see controllers/rewardController.js).
+  rewardProgram: {
+    enabled: { type: Boolean, default: false },
+    title: { type: String, default: 'Trader Rewards' },
+    description: { type: String, default: '' },
+    // Which products' profit counts toward milestones (keys of PROFIT_SOURCES in services/rewardProgress.js).
+    sources: { type: [String], default: ['market', 'copy', 'ai', 'stocks', 'packages', 'staking', 'realEstate', 'mining'] }
+  },
 
   exchangeRates: {
   type: Object,
