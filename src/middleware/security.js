@@ -46,6 +46,8 @@ const limiter = (windowMs, max, message) => rateLimit({
 export const authLimiter = limiter(15 * 60 * 1000, 20, 'Too many attempts, please try again in 15 minutes.');
 /** Money-moving endpoints. */
 export const moneyLimiter = limiter(60 * 1000, 30, 'Too many requests, please slow down.');
+/** Card secrets (reveal number/CVV, set or change PIN), per IP. */
+export const cardSecretLimiter = limiter(15 * 60 * 1000, 30, 'Too many card requests. Please wait a few minutes and try again.');
 /** Admin APIs. */
 export const adminLimiter = limiter(15 * 60 * 1000, 1000, 'Too many requests from this IP, please try again later.');
 /** General API traffic. */
