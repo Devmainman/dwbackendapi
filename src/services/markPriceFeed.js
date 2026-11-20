@@ -2,7 +2,7 @@
 // Crypto pairs quoted in USD stablecoins (e.g. BTC/USDT, ETHUSD) are priced from
 // Binance's public ticker every minute. Other symbols keep the mark price the
 // admin sets. Disable with COPY_PRICE_FEED=off.
-import axios from 'axios';
+import { binanceGet } from './binance.js';
 import MasterTrade from '../models/MasterTrade.js';
 import { updateMarkPrice } from './copyTradingEngine.js';
 
@@ -22,10 +22,7 @@ export const refreshMarkPrices = async () => {
   if (!pairs.size) return 0;
 
   const wanted = [...new Set(pairs.values())];
-  const { data } = await axios.get('https://api.binance.com/api/v3/ticker/price', {
-    params: { symbols: JSON.stringify(wanted) },
-    timeout: 8000
-  });
+  const data = await binanceGet('/api/v3/ticker/price', { symbols: JSON.stringify(wanted) }, { timeout: 8000 });
   const prices = new Map((Array.isArray(data) ? data : []).map((t) => [t.symbol, Number(t.price)]));
 
   let updated = 0;

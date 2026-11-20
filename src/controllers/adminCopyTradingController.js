@@ -12,6 +12,7 @@ import { HttpError } from '../utils/wallet.js';
 import { handler, paging } from '../services/productService.js';
 import { createDefaultAvatar } from '../services/traderAvatar.js';
 import TraderFollow from '../models/TraderFollow.js';
+import { refreshMarkPrices } from '../services/markPriceFeed.js';
 import {
   openMasterTrade, closeMasterTrade, updateMarkPrice, stopCopy, valueCopies, recomputeTraderStats, pnlPercentAt, isValidId
 } from '../services/copyTradingEngine.js';
@@ -252,7 +253,7 @@ const tradeInput = (body) => {
   const entryPrice = parseAmount(body.entryPrice);
   const allocationPercent = body.allocationPercent === undefined ? 10 : parseAmount(body.allocationPercent, { max: 100 });
   const leverage = body.leverage === undefined ? 1 : parseAmount(body.leverage, { max: 100 });
-  if (!/^[A-Z0-9./_-]{2,20}$/.test(symbol)) throw new HttpError(400, 'Invalid symbol');
+  if (!/^[A-Z0-9./_-]{2,20}$/.test(symbol)) throw new HttpError(400, 'Enter a valid symbol, for example BTC/USDT');
   if (!['buy', 'sell'].includes(side)) throw new HttpError(400, 'Side must be buy or sell');
   if (!entryPrice) throw new HttpError(400, 'Invalid entry price');
   if (!allocationPercent || allocationPercent < 0.1) throw new HttpError(400, 'allocationPercent must be between 0.1 and 100');
@@ -267,12 +268,29 @@ const listTrades = async (req, res, forcedStatus) => {
   const filter = { traderId: trader.traderId };
   const status = forcedStatus || req.query.status;
   if (['open', 'closed', 'cancelled'].includes(status)) filter.status = status;
-  const [trades, total] = await Promise.all([
+  const all = { traderId: trader.traderId };
+  const [trades, total, openTrades, closed, activeCopyTrades, totalCopiedTrades, realized] = await Promise.all([
     MasterTrade.find(filter).sort({ openedAt: -1 }).skip(skip).limit(limit).lean(),
-    MasterTrade.countDocuments(filter)
+    MasterTrade.countDocuments(filter),
+    MasterTrade.countDocuments({ ...all, status: 'open' }),
+    MasterTrade.find({ ...all, status: 'closed' }).select('pnlPercent').lean(),
+    CopyTrade.countDocuments({ ...all, status: 'active' }),
+    CopiedTrade.countDocuments(all),
+    CopiedTrade.aggregate([{ $match: { ...all, status: 'closed' } }, { $group: { _id: null, sum: { $sum: '$profitLoss' } } }])
   ]);
+  const wins = closed.filter((m) => m.pnlPercent > 0).length;
   res.json({
     success: true,
+    trader: { traderId: trader.traderId, username: trader.username, fullName: trader.fullName, isActive: trader.isActive },
+    stats: {
+      totalTrades: openTrades + closed.length,
+      openTrades,
+      closedTrades: closed.length,
+      totalProfit: round2(realized[0]?.sum || 0),
+      winRate: closed.length ? (wins / closed.length) * 100 : 0,
+      activeCopyTrades,
+      totalCopiedTrades
+    },
     trades: trades.map((m) => ({ ...m, id: m._id, tradeId: m._id, unrealizedPercent: m.status === 'open' ? pnlPercentAt(m, m.markPrice || m.entryPrice) : undefined })),
     total, page, limit
   });
@@ -282,8 +300,10 @@ export const getTraderTrades = handler((req, res) => listTrades(req, res));
 /** POST /traders/:traderId/trades  { symbol, side, entryPrice, allocationPercent?, leverage?, notes? } */
 export const addTradeToTrader = handler(async (req, res) => {
   const trader = await findTrader(req.params.traderId || req.body.traderId);
-  if (!trader.isActive) throw new HttpError(400, 'Trader is inactive');
-  const master = await openMasterTrade(trader, tradeInput(req.body));
+  if (!trader.isActive) throw new HttpError(400, 'This trader is inactive. Activate the trader before placing trades.');
+  // The Trader Management screen nests the trade under tradeData.
+  const body = req.body.tradeData && typeof req.body.tradeData === 'object' ? req.body.tradeData : req.body;
+  const master = await openMasterTrade(trader, tradeInput(body));
   res.status(201).json({ success: true, message: `Trade opened and copied to ${master.copiedCount} copier(s)`, trade: master });
 });
 
@@ -359,7 +379,11 @@ export const getTraderOpenTrades = handler((req, res) => listTrades(req, res, 'o
 /** POST /update-prices  { prices: [{ symbol, price, traderId? } | { tradeId, price }] } */
 export const updatePrices = handler(async (req, res) => {
   const list = Array.isArray(req.body.prices) ? req.body.prices.slice(0, 500) : [];
-  if (!list.length) throw new HttpError(400, 'prices array is required');
+  if (!list.length) {
+    // No prices given: reprice open crypto trades from the live market.
+    const n = await refreshMarkPrices();
+    return res.json({ success: true, message: `${n} open trade(s) repriced from live prices`, updated: n, updatedTraders: n });
+  }
   let updated = 0;
   for (const p of list) {
     const price = parseAmount(p?.price ?? p?.markPrice);

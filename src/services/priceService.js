@@ -1,6 +1,6 @@
 // USD prices for crypto assets, from Binance's public ticker with a short cache.
 // Falls back to an admin-set price when an asset isn't listed or the API is unreachable.
-import axios from 'axios';
+import { binanceGet } from './binance.js';
 import { safeRateBetween } from './fx.js';
 import { round2 } from '../utils/money.js';
 
@@ -16,7 +16,7 @@ export const getUsdPrice = async (asset, fallback = null) => {
   const hit = cache.get(sym);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.price;
   try {
-    const { data } = await axios.get('https://api.binance.com/api/v3/ticker/price', { params: { symbol: `${sym}USDT` }, timeout: 5000 });
+    const data = await binanceGet('/api/v3/ticker/price', { symbol: `${sym}USDT` }, { timeout: 5000 });
     const price = Number(data?.price);
     if (price > 0) {
       cache.set(sym, { price, at: Date.now() });

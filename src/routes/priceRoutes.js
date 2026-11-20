@@ -1,6 +1,6 @@
 // routes/priceRoutes.js
 import express from 'express';
-import axios from 'axios';
+import { binanceGet } from '../services/binance.js';
 
 const router = express.Router();
 
@@ -11,7 +11,7 @@ router.get('/prices', async (req, res) => {
     
     // Fetch all prices in parallel
     const pricePromises = symbols.map(symbol => 
-      axios.get(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`)
+      binanceGet('/api/v3/ticker/24hr', { symbol }).then((data) => ({ data }))
     );
     
     const responses = await Promise.all(pricePromises);

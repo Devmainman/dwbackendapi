@@ -314,7 +314,7 @@ export const getPools = handler(async (req, res) => {
     success: true,
     pools: pools.map((p) => ({
       id: p._id, name: p.name, fee: p.fee, minPayout: p.minPayout, miners: p.miners, uptime: p.uptime,
-      algorithm: p.algorithm, coin: p.supportedCoins?.[0] || 'BTC', url: p.url, location: p.location, status: p.status,
+      algorithm: p.algorithm, coin: p.supportedCoins?.[0] || 'BTC', url: p.url, location: [p.location?.city, p.location?.country].filter(Boolean).join(', '), status: p.status,
       isDefault: String(user?.mining?.defaultPool || '') === String(p._id)
     }))
   });

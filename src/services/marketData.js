@@ -4,6 +4,7 @@
 //   Forex   A/B                    -> open.er-api.com USD rates (cached 30 min)
 // Every fill and P/L is computed from these prices; the client never sets a price.
 import axios from 'axios';
+import { binanceGet, coinbaseTicker } from './binance.js';
 
 const CRYPTO_TTL = 4000;
 const FX_TTL = 30 * 60 * 1000;
@@ -43,21 +44,21 @@ async function binanceTickers(symbols) {
   const now = Date.now();
   const missing = symbols.filter((s) => !(cryptoCache.get(s) && now - cryptoCache.get(s).at < CRYPTO_TTL));
   if (missing.length) {
+    const store = (t) => cryptoCache.set(t.symbol, {
+      price: Number(t.lastPrice), change: Number(t.priceChangePercent),
+      high: Number(t.highPrice), low: Number(t.lowPrice), volume: Number(t.quoteVolume), at: now
+    });
     try {
-      const { data } = await axios.get('https://api.binance.com/api/v3/ticker/24hr', {
-        params: { symbols: JSON.stringify(missing) },
-        timeout: 6000
-      });
-      for (const t of Array.isArray(data) ? data : []) {
-        cryptoCache.set(t.symbol, {
-          price: Number(t.lastPrice), change: Number(t.priceChangePercent),
-          high: Number(t.highPrice), low: Number(t.lowPrice), volume: Number(t.quoteVolume), at: now
-        });
-      }
+      const data = await binanceGet('/api/v3/ticker/24hr', { symbols: JSON.stringify(missing) });
+      for (const t of Array.isArray(data) ? data : []) store(t);
     } catch (err) {
-      // Binance rejects the whole batch if one symbol is unknown; fall back to one by one.
-      if (missing.length > 1) {
+      if (err?.response?.status === 400 && missing.length > 1) {
+        // Binance rejects the whole batch if one symbol is unknown; fall back to one by one.
         await Promise.all(missing.map((s) => binanceTickers([s]).catch(() => null)));
+      } else if (err?.response?.status !== 400) {
+        // Binance unreachable from this server: use Coinbase so trading keeps working.
+        const got = await Promise.all(missing.map((s) => coinbaseTicker(s)));
+        got.filter(Boolean).forEach(store);
       }
     }
   }
