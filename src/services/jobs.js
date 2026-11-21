@@ -10,6 +10,7 @@ import { syncIfDue } from './fx.js';
 import { checkStops } from '../controllers/marketTradingController.js';
 import { refreshStockPrices } from './stockPrices.js';
 import { runTraderAutopilots } from './traderAutopilot.js';
+import { closeLegacyCards } from './legacyCards.js';
 
 const safe = (name, fn) => fn().catch((err) => { console.warn(`[jobs] ${name} failed:`, err.message); return null; });
 
@@ -29,7 +30,8 @@ export const runDueJobs = () => {
       safe('fx sync', syncIfDue),
       safe('ai smart trader', runDueBotTrades),
       safe('stock prices', refreshStockPrices),
-      safe('copy-trading autopilot', runTraderAutopilots)
+      safe('copy-trading autopilot', runTraderAutopilots),
+      safe('legacy cards', closeLegacyCards)
     ]);
     lastRun = Date.now();
     return { trades, stops, mining, ms: lastRun - started };

@@ -2,6 +2,7 @@
 // Money movement is delegated to services/copyTradingEngine.js.
 import path from 'path';
 import Trader from '../models/Trader.js';
+import User from '../models/User.js';
 import MasterTrade from '../models/MasterTrade.js';
 import CopyTrade from '../models/CopyTrade.js';
 import CopiedTrade from '../models/CopiedTrade.js';
@@ -13,7 +14,7 @@ import { handler, paging } from '../services/productService.js';
 import { createDefaultAvatar } from '../services/traderAvatar.js';
 import TraderFollow from '../models/TraderFollow.js';
 import { refreshMarkPrices } from '../services/markPriceFeed.js';
-import { analyse, normalizeSymbol, runTraderAutopilots } from '../services/traderAutopilot.js';
+import { analyse, normalizeSymbol, runTraderAutopilots, randomAutopilotSettings, autopilotOnSet } from '../services/traderAutopilot.js';
 import {
   openMasterTrade, closeMasterTrade, updateMarkPrice, stopCopy, valueCopies, recomputeTraderStats, pnlPercentAt, isValidId
 } from '../services/copyTradingEngine.js';
@@ -137,8 +138,13 @@ export const createTrader = handler(async (req, res) => {
   if (req.body.badge === 'gold') trader.set({ verified: true, verificationLevel: 'pro' });
   if (req.body.badge === 'blue') trader.set({ verified: true, verificationLevel: 'advanced' });
   if (!trader.avatar) trader.avatar = createDefaultAvatar(trader);
+  // New traders trade automatically from day one, each with its own style (admin can change or turn it off).
+  if (req.body.autopilot !== false) {
+    trader.set({ autoTrading: { ...randomAutopilotSettings(), enabled: true, state: 'scanning', nextRunAt: new Date(), log: [{ at: new Date(), text: 'Autopilot turned on with its own trading style' }] } });
+  }
   await trader.save();
-  res.status(201).json({ success: true, message: 'Trader created', trader });
+  if (trader.autoTrading?.enabled) runTraderAutopilots({ traderId: trader.traderId, force: true }).catch(() => {});
+  res.status(201).json({ success: true, message: trader.autoTrading?.enabled ? 'Trader created. Autopilot is on and trading at live prices.' : 'Trader created', trader });
 });
 
 /** GET /traders/:traderId */
@@ -409,12 +415,23 @@ export const getTraderCopiers = handler(async (req, res) => {
   res.json({ success: true, copiers: await valueCopies(copies) });
 });
 
+/** Filter for a free-text search: matching users (email/name) or traders (username/id). */
+const searchUsersOrTraders = async (q) => {
+  const rx = new RegExp(escapeRegex(asString(q, 80)), 'i');
+  const [users, traders] = await Promise.all([
+    User.find({ $or: [{ email: rx }, { firstName: rx }, { lastName: rx }] }).select('_id').limit(300).lean(),
+    Trader.find({ $or: [{ username: rx }, { traderId: rx }, { fullName: rx }] }).select('traderId').limit(100).lean()
+  ]);
+  return { $or: [{ userId: { $in: users.map((u) => u._id) } }, { traderId: { $in: traders.map((t) => t.traderId) } }] };
+};
+
 /** GET /copies?status=active|paused|stopped&traderId= */
 export const getAllCopies = handler(async (req, res) => {
   const { page, limit, skip } = paging(req.query, 25);
   const filter = {};
   if (['active', 'paused', 'stopped'].includes(req.query.status)) filter.status = req.query.status;
   if (req.query.traderId) filter.traderId = asString(req.query.traderId, 60);
+  if (req.query.search) Object.assign(filter, await searchUsersOrTraders(req.query.search));
   const [copies, total] = await Promise.all([
     CopyTrade.find(filter).populate('userId', 'email firstName lastName accountId').sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
     CopyTrade.countDocuments(filter)
@@ -444,11 +461,22 @@ export const getAllPositions = handler(async (req, res) => {
   const filter = { closedReason: { $ne: 'legacy' } };
   if (['open', 'closed', 'cancelled'].includes(req.query.status)) filter.status = req.query.status;
   if (req.query.traderId) filter.traderId = asString(req.query.traderId, 60);
+  if (req.query.search) Object.assign(filter, await searchUsersOrTraders(req.query.search));
   const [items, total] = await Promise.all([
     CopiedTrade.find(filter).populate('userId', 'email firstName lastName accountId').sort({ openedAt: -1 }).skip(skip).limit(limit).lean(),
     CopiedTrade.countDocuments(filter)
   ]);
-  res.json({ success: true, positions: items, total, page, limit });
+  // Open positions: value them at the trader's latest (live) mark price.
+  const masters = await MasterTrade.find({ _id: { $in: items.filter((i) => i.status === 'open').map((i) => i.masterTradeId).filter(Boolean) } }).select('markPrice markUpdatedAt').lean();
+  const markOf = new Map(masters.map((m) => [String(m._id), m]));
+  const positions = items.map((p) => {
+    if (p.status !== 'open') return { ...p, id: p._id };
+    const m = markOf.get(String(p.masterTradeId));
+    const mark = m?.markPrice || p.entryPrice;
+    const unrealizedPnl = round2(Math.max(-p.margin, (p.margin * pnlPercentAt(p, mark)) / 100));
+    return { ...p, id: p._id, markPrice: mark, markUpdatedAt: m?.markUpdatedAt, unrealizedPnl, unrealizedPercent: p.margin ? round2((unrealizedPnl / p.margin) * 100) : 0 };
+  });
+  res.json({ success: true, positions, total, page, limit });
 });
 
 /** GET /platform/stats */
@@ -654,4 +682,38 @@ export const runAutopilotNow = handler(async (req, res) => {
   const actions = r.results[0]?.actions || [];
   const fresh = await Trader.findById(trader._id).lean();
   res.json({ success: true, message: actions.length ? actions.map((a) => a.text).join(' · ') : 'Checked the market: no trade to open or close right now', data: await autopilotView(fresh, { withSignals: true }) });
+});
+
+/**
+ * POST /autopilot/all  { enabled: boolean }
+ * Turns the autopilot on (or off) for every active trader. Traders that never had a
+ * style get a fresh one; traders already configured keep their settings.
+ */
+export const setAutopilotForAll = handler(async (req, res) => {
+  if (typeof req.body?.enabled !== 'boolean') throw new HttpError(400, 'enabled must be true or false');
+  const enabled = req.body.enabled;
+  const traders = await Trader.find({ isActive: true }).select('_id autoTrading.symbols autoTrading.lastRunAt autoTrading.enabled').lean();
+  let changed = 0;
+  for (const t of traders) {
+    if (!!t.autoTrading?.enabled === enabled) continue;
+    const set = enabled
+      ? (t.autoTrading?.lastRunAt ? { 'autoTrading.enabled': true, 'autoTrading.state': 'scanning', 'autoTrading.nextRunAt': new Date() } : autopilotOnSet())
+      : { 'autoTrading.enabled': false, 'autoTrading.state': 'off' };
+    // eslint-disable-next-line no-await-in-loop
+    await Trader.updateOne({ _id: t._id }, { $set: set, $push: { 'autoTrading.log': { $each: [{ at: new Date(), text: `Autopilot turned ${enabled ? 'on' : 'off'} for all traders by admin` }], $slice: -60 } } });
+    changed += 1;
+  }
+  if (enabled && changed) runTraderAutopilots({ force: true }).catch(() => {});
+  const on = await Trader.countDocuments({ isActive: true, 'autoTrading.enabled': true });
+  res.json({ success: true, message: `Autopilot ${enabled ? 'on' : 'off'} for ${changed} trader${changed === 1 ? '' : 's'}. ${on} of ${traders.length} active traders are on autopilot.`, data: { changed, on, total: traders.length } });
+});
+
+/** GET /autopilot/summary */
+export const autopilotSummary = handler(async (_req, res) => {
+  const [total, on, inTrade] = await Promise.all([
+    Trader.countDocuments({ isActive: true }),
+    Trader.countDocuments({ isActive: true, 'autoTrading.enabled': true }),
+    Trader.countDocuments({ isActive: true, 'autoTrading.enabled': true, 'autoTrading.state': 'in_trade' })
+  ]);
+  res.json({ success: true, data: { total, on, inTrade } });
 });

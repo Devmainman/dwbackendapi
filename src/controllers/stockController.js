@@ -323,3 +323,21 @@ export const adminInstallPopular = handler(async (_req, res) => {
     data: { installed, failed: failed.map((f) => `${f.symbol}: ${f.error}`), total: POPULAR_STOCKS.length }
   });
 });
+
+/**
+ * DELETE /api/admin/products/stocks/:id
+ * Removes a listing nobody holds. While users still hold shares it is refused
+ * (hide it instead, so holders can still sell). Order history is kept.
+ */
+export const adminDeleteStock = handler(async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) throw new HttpError(400, 'Invalid id');
+  const stock = await StockAsset.findById(req.params.id).select('symbol name');
+  if (!stock) throw new HttpError(404, 'Stock not found');
+  const holders = await StockHolding.countDocuments({ stock: stock._id, shares: { $gt: 0 } });
+  if (holders) {
+    throw new HttpError(409, `${holders} user${holders === 1 ? ' holds' : 's hold'} ${stock.symbol}. Set it to Hidden instead so ${holders === 1 ? 'they' : 'they'} can still sell, and delete it once nobody holds it.`);
+  }
+  await StockHolding.deleteMany({ stock: stock._id });
+  await StockAsset.deleteOne({ _id: stock._id });
+  res.json({ success: true, message: `${stock.symbol} deleted` });
+});

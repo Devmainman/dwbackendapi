@@ -14,6 +14,7 @@ import { routeUploadsToBlob, serveUploadFromBlob, streamPrivateFromBlob, blobEna
 import { runDueJobs, jobsOnTraffic } from './services/jobs.js';
 import { refreshStockPrices } from './services/stockPrices.js';
 import { runTraderAutopilots } from './services/traderAutopilot.js';
+import { closeLegacyCards } from './services/legacyCards.js';
 
 import connectDB from './config/db.js';
 import { UPLOAD_ROOT, PRIVATE_UPLOAD_DIRS, safeFileName } from './config/paths.js';
@@ -89,7 +90,6 @@ import adminSettingsRoutes from './routes/adminSettingsRoutes.js';
 
 // New product modules
 import coldStorageRoutes from './routes/coldStorageRoutes.js';
-import cardRoutes from './routes/cardRoutes.js';
 import { cardRequestRouter, adminCardSettingsRouter, adminCardInvoicesRouter } from './routes/cardRequestRoutes.js';
 import { smartBotRouter, adminSmartBotRouter, adminBotInvoiceRouter } from './routes/smartBotRoutes.js';
 import { runDueBotTrades } from './services/smartBotEngine.js';
@@ -302,7 +302,6 @@ app.use('/api/admin/settings', adminSettingsRoutes);
 
 // New product modules
 app.use('/api/cold-storage', coldStorageRoutes);
-app.use('/api/cards', cardRoutes);
 app.use('/api/card-requests', cardRequestRouter);
 app.use('/api/admin/card-settings', adminCardSettingsRouter);
 app.use('/api/admin/card-invoices', adminCardInvoicesRouter);
@@ -393,6 +392,8 @@ export const startServer = async () => {
   const fxJob = startFxSyncJob();
   // AI Smart Trader: place due bot trades every 30 seconds.
   const smartBotJob = env.NODE_ENV === 'test' ? null : setInterval(() => { runDueBotTrades().catch((e) => console.warn('[smart-bot]', e.message)); }, 30000);
+  // Old card system: return any balance left on old cards (once).
+  if (env.NODE_ENV !== 'test') setTimeout(() => closeLegacyCards().catch((e) => console.warn('[legacy cards]', e.message)), 5000);
   // Live stock prices and the copy-trading autopilot: every minute.
   const liveJob = env.NODE_ENV === 'test' ? null : setInterval(() => {
     refreshStockPrices().catch((e) => console.warn('[stocks]', e.message));

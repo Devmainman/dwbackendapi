@@ -20,7 +20,7 @@ import Notification from '../models/Notification.js';
 import MarketPosition from '../models/MarketPosition.js';
 import ConnectedWallet from '../models/ConnectedWallet.js';
 import ColdStorageVault from '../models/ColdStorageVault.js';
-import Card from '../models/Card.js';
+import CardRequest from '../models/CardRequest.js';
 import Trade from '../models/Trade.js';
 import CopyTrade from '../models/CopyTrade.js';
 import MiningSession from '../models/MiningSession.js';
@@ -58,7 +58,7 @@ router.get('/overview', handler(async (_req, res) => {
     User.countDocuments({}),
     totalIn(User, {}, 'balance', base),
     totalIn(ColdStorageVault, { status: { $ne: 'closed' } }, 'amount', base),
-    totalIn(Card, { status: { $in: ['active', 'frozen'] } }, 'balance', base),
+    CardRequest.aggregate([{ $group: { _id: '$stage', n: { $sum: 1 } } }]),
     totalIn(Trade, { status: 'in-progress' }, 'amount', base),
     totalIn(MarketPosition, { status: 'open' }, 'margin', base),
     totalIn(CopyTrade, { isOpen: true }, 'amount', base),
@@ -75,7 +75,7 @@ router.get('/overview', handler(async (_req, res) => {
       users,
       userBalances: balances,
       coldStorage: vaults,
-      cards,
+      cards: (() => { const by = Object.fromEntries(cards.map((c) => [c._id, c.n])); return { active: by.active || 0, frozen: by.frozen || 0, toReview: (by.purchase_review || 0) + (by.activation_review || 0) }; })(),
       tradingPackages: packages,
       liveMarkets: market,
       copyTrading: copies,

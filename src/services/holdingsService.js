@@ -3,7 +3,6 @@
 // today's rate so the totals add up correctly after a currency switch.
 import User from '../models/User.js';
 import ColdStorageVault from '../models/ColdStorageVault.js';
-import Card from '../models/Card.js';
 import Trade from '../models/Trade.js';
 import MarketPosition from '../models/MarketPosition.js';
 import CopyTrade from '../models/CopyTrade.js';
@@ -28,7 +27,6 @@ export const GROUPS = {
   trading: { label: 'Trading', color: '#8b5cf6' },
   copyTrading: { label: 'Copy trading', color: '#ec4899' },
   coldStorage: { label: 'Cold storage', color: '#22d3ee' },
-  cards: { label: 'Cards', color: '#a78bfa' },
   mining: { label: 'Mining', color: '#84cc16' }
 };
 
@@ -44,9 +42,8 @@ export async function buildHoldings(userId) {
     return round2((Number(amount) || 0) * rateCache.get(key));
   };
 
-  const [vaults, cards, holdings, stakes, props, trades, positions, copiesRaw, rewards, base] = await Promise.all([
+  const [vaults, holdings, stakes, props, trades, positions, copiesRaw, rewards, base] = await Promise.all([
     ColdStorageVault.find({ user: userId, status: { $ne: 'closed' } }).lean(),
-    Card.find({ user: userId, status: { $in: ['active', 'frozen'] } }).lean(),
     StockHolding.find({ user: userId, shares: { $gt: 0 } }).populate('stock', 'symbol name price previousClose logo').lean(),
     StakePosition.find({ user: userId, status: 'active' }).lean(),
     PropertyInvestment.find({ user: userId, status: 'active' }).populate('property', 'title images location').lean(),
@@ -125,9 +122,6 @@ export async function buildHoldings(userId) {
     push({ id: String(v._id), group: 'coldStorage', name: v.name, symbol: v.asset || v.currency, value: await toUser(v.amount, v.currency), cost: null, detail: v.status === 'unlock_requested' ? 'Unlocking' : v.lockType === 'time_locked' ? 'Time-locked' : 'Flexible', link: '/cold-storage' });
   }
 
-  for (const c of cards) {
-    push({ id: String(c._id), group: 'cards', name: `${c.brand === 'mastercard' ? 'Mastercard' : 'Visa'} •• ${c.last4 || '····'}`, symbol: 'CARD', value: await toUser(c.balance, c.currency), cost: null, detail: c.status === 'frozen' ? 'Frozen' : `${c.type} card`, link: '/cards' });
-  }
 
   if (rewards.length) {
     let value = 0;

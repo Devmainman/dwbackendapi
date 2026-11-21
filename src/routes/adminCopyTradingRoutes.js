@@ -25,6 +25,8 @@ router.delete('/traders/:traderId', c.deleteTrader);
 // Trader's trades (opening/closing here is mirrored to every copier)
 router.get('/traders/:traderId/trades', c.getTraderTrades);
 router.post('/traders/:traderId/trades', c.addTradeToTrader);
+router.post('/autopilot/all', c.setAutopilotForAll);
+router.get('/autopilot/summary', c.autopilotSummary);
 router.get('/traders/:traderId/autopilot', c.getAutopilot);
 router.put('/traders/:traderId/autopilot', c.updateAutopilot);
 router.post('/traders/:traderId/autopilot/run', c.runAutopilotNow);

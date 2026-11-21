@@ -86,8 +86,19 @@ export async function analyse(symbol, { strategy = 'trend', timeframe = '15m' } 
 const fmt = (n) => (n >= 100 ? n.toFixed(2) : n >= 1 ? n.toFixed(4) : n.toPrecision(4));
 
 /** One autopilot pass for one trader. Returns what it did. */
+const CONFIG_DEFAULTS = {
+  strategy: 'trend', timeframe: '15m', allocationPercent: 10, leverage: 1, takeProfitPercent: 2,
+  stopLossPercent: 1, maxHoldHours: 24, maxOpenTrades: 2, cooldownMinutes: 30
+};
+
 export async function runTrader(trader) {
-  const cfg = trader.autoTrading || {};
+  let cfg = { ...CONFIG_DEFAULTS, ...(trader.autoTrading || {}) };
+  // Traders created before the autopilot existed have no stored style: give them one now.
+  if (!trader.autoTrading?.symbols?.length) {
+    const style = randomAutopilotSettings();
+    await Trader.updateOne({ _id: trader._id }, { $set: Object.fromEntries(Object.entries(style).map(([k, v]) => [`autoTrading.${k}`, v])) });
+    cfg = { ...cfg, ...style };
+  }
   const actions = [];
   const log = (text) => actions.push({ at: new Date(), text });
   const open = await MasterTrade.find({ traderId: trader.traderId, status: 'open' }).lean();
@@ -170,6 +181,7 @@ let running = null;
 export function runTraderAutopilots({ traderId, force = false } = {}) {
   if (running && !traderId) return running;
   const job = (async () => {
+    await ensureAutopilotDefaults().catch((err) => console.warn('[autopilot] defaults:', err.message));
     const now = new Date();
     const filter = { 'autoTrading.enabled': true, isActive: true, ...(traderId ? { traderId } : {}) };
     if (!force) filter.$or = [{ 'autoTrading.nextRunAt': null }, { 'autoTrading.nextRunAt': { $lte: now } }];
@@ -193,4 +205,59 @@ export function runTraderAutopilots({ traderId, force = false } = {}) {
   })();
   if (!traderId) running = job.finally(() => { running = null; });
   return job;
+}
+
+/* ------------------------- defaults for every trader ------------------------- */
+
+const SYMBOL_POOL = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT', 'DOGE/USDT', 'ADA/USDT', 'LINK/USDT', 'AVAX/USDT', 'LTC/USDT', 'DOT/USDT', 'TRX/USDT'];
+const pick = (list) => list[Math.floor(Math.random() * list.length)];
+const between = (min, max, dp = 1) => Math.round((min + Math.random() * (max - min)) * 10 ** dp) / 10 ** dp;
+
+/**
+ * A distinct trading style for one trader, so traders don't all make the same trades:
+ * its own coins, strategy, timeframe and risk. Fills and exits still use live prices.
+ */
+export const randomAutopilotSettings = () => {
+  const coins = [...SYMBOL_POOL].sort(() => Math.random() - 0.5).slice(0, 3 + Math.floor(Math.random() * 3));
+  const stopLoss = between(0.6, 1.5);
+  return {
+    symbols: coins,
+    strategy: Math.random() < 0.7 ? 'trend' : 'reversal',
+    timeframe: pick(['5m', '15m', '15m', '1h']),
+    takeProfitPercent: Math.round(stopLoss * between(1.4, 2.4) * 10) / 10,
+    stopLossPercent: stopLoss,
+    allocationPercent: Math.round(between(5, 15, 0)),
+    leverage: pick([1, 1, 1, 2, 3]),
+    maxOpenTrades: 1 + Math.floor(Math.random() * 3),
+    maxHoldHours: pick([6, 12, 24, 48]),
+    cooldownMinutes: pick([15, 30, 45, 60, 90])
+  };
+};
+
+/** The `$set` that turns the autopilot on with a fresh random style. */
+export const autopilotOnSet = (style = randomAutopilotSettings()) => ({
+  ...Object.fromEntries(Object.entries(style).map(([k, v]) => [`autoTrading.${k}`, v])),
+  'autoTrading.enabled': true,
+  'autoTrading.state': 'scanning',
+  'autoTrading.nextRunAt': new Date()
+});
+
+/**
+ * Once per platform: every trader that never had the autopilot configured gets it on
+ * with its own style. Traders the admin later turns off stay off.
+ */
+let defaultsChecked = false;
+export async function ensureAutopilotDefaults() {
+  if (defaultsChecked) return 0;
+  const { default: Setting } = await import('../models/Setting.js');
+  const s = await Setting.findOne().select('flags').lean();
+  if (s?.flags?.autopilotDefaults) { defaultsChecked = true; return 0; }
+  const traders = await Trader.find({ isActive: true, 'autoTrading.enabled': { $ne: true }, 'autoTrading.lastRunAt': null }).select('_id').lean();
+  for (const t of traders) {
+    // eslint-disable-next-line no-await-in-loop
+    await Trader.updateOne({ _id: t._id }, { $set: autopilotOnSet(), $push: { 'autoTrading.log': { at: new Date(), text: 'Autopilot turned on automatically with its own trading style' } } });
+  }
+  await Setting.updateOne({}, { $set: { 'flags.autopilotDefaults': true } }, { upsert: true });
+  defaultsChecked = true;
+  return traders.length;
 }
