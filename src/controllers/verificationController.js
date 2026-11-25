@@ -102,7 +102,7 @@ export const completeProfile = async (req, res) => {
     if (!validation.valid) {
       return res.status(400).json({ 
         success: false,
-        message: 'Validation failed',
+        message: Object.values(validation.errors)[0] || 'Please check the form',
         errors: validation.errors 
       });
     }
@@ -118,10 +118,10 @@ export const completeProfile = async (req, res) => {
     // Update user fields
     user.firstName = firstName;
     user.lastName = lastName;
-    user.mobile = phoneNumber;
+    user.mobile = (phoneNumber || '').trim();
     user.country = country;
-    user.gender = gender;
-    user.currency = currency;
+    user.gender = String(gender).toLowerCase();
+    // Currency changes go through /users/preferences, which converts the balance; never here.
 
     const savedUser = await user.save();
 

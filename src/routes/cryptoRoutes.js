@@ -2,9 +2,13 @@ import express from 'express';
 import { authenticate, isAdmin } from '../middleware/auth.js';
 import { moneyLimiter } from '../middleware/security.js';
 import {
-  userWallets, markets, sparklines, history, depositOptions, createDeposit, userDeposits, convertQuote, convert,
+  publicCoins, userWallets, markets, sparklines, history, depositOptions, createDeposit, userDeposits, convertQuote, convert,
   adminAssets, adminUpdateAsset, adminBulkAssets, adminUpdateSettings, adminDeposits, adminDecideDeposit, adminUserWallets
 } from '../controllers/cryptoController.js';
+
+/* Public: /api/public/crypto (landing page) */
+export const publicCryptoRouter = express.Router();
+publicCryptoRouter.get('/', publicCoins);
 
 /* User: /api/crypto */
 export const cryptoRouter = express.Router();

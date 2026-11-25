@@ -65,7 +65,9 @@ export const getReferralInfo = async (req, res) => {
       totalEarned: totalEarnedConverted,
       pendingBonus: pendingBonusConverted,
       referrals: referralsWithConvertedBonus,
-      currency: userCurrency.code
+      currency: userCurrency.code,
+      // What each successful referral pays, in the user's currency (same fallback the signup uses).
+      bonusPerReferral: convertAmount((await Setting.findOne().select('referralCommission').lean())?.referralCommission || 0.1, defaultCurrency.rate, userCurrency.rate)
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

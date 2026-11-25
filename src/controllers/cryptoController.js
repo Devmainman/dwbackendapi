@@ -76,6 +76,17 @@ export const userWallets = handler(async (req, res) => {
   });
 });
 
+/** GET /api/public/crypto — no login: the coins open for deposits, for the landing page. */
+export const publicCoins = handler(async (_req, res) => {
+  await ensureCryptoCatalog();
+  const [settings, assets] = await Promise.all([
+    cryptoSettings(),
+    CryptoAsset.find({ enabled: true }).sort({ sortOrder: 1, symbol: 1 }).select('symbol name icon -_id').lean()
+  ]);
+  res.set('Cache-Control', 'public, max-age=300');
+  res.json({ success: true, data: { enabled: settings.enabled, convertEnabled: settings.convertEnabled, coins: settings.enabled ? assets : [] } });
+});
+
 /** GET /api/crypto/markets — every catalog coin at its live price in the user's currency. */
 export const markets = handler(async (req, res) => {
   await ensureCryptoCatalog();

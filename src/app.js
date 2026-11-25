@@ -96,7 +96,7 @@ import { runDueBotTrades } from './services/smartBotEngine.js';
 import { publicBlogRouter, adminBlogRouter } from './routes/blogRoutes.js';
 import { publicFaqRouter, adminFaqRouter } from './routes/faqRoutes.js';
 import { rewardRouter, adminRewardRouter, adminRewardInvoiceRouter } from './routes/rewardRoutes.js';
-import { cryptoRouter, adminCryptoRouter } from './routes/cryptoRoutes.js';
+import { cryptoRouter, adminCryptoRouter, publicCryptoRouter } from './routes/cryptoRoutes.js';
 import walletRoutes from './routes/walletRoutes.js';
 import stockRoutes from './routes/stockRoutes.js';
 import stakingRoutes from './routes/stakingRoutes.js';
@@ -268,6 +268,7 @@ app.use('/api', publicWithdrawalRoutes);
 app.get('/api/public/plans', getPublicPlans); // no auth: shown on the landing page
 // Blog is public (no login), mounted before the routers that require one.
 app.use('/api/public/blog', publicBlogRouter);
+app.use('/api/public/crypto', publicCryptoRouter); // no auth: coins shown on the landing page
 app.use('/api/admin/blog', adminBlogRouter);
 app.use('/api/public/faq', publicFaqRouter);
 app.use('/api/admin/faq', adminFaqRouter);

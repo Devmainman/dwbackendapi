@@ -279,7 +279,7 @@ export const changePassword = async (req, res) => {
     // Verify old password
     const isMatch = await user.comparePassword(oldPassword);
     if (!isMatch) {
-      return res.status(401).json({ 
+      return res.status(400).json({ // 400, not 401: a wrong password is not an expired session 
         success: false,
         message: 'Current password is incorrect' 
       });

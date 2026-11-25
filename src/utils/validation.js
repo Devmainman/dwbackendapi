@@ -38,7 +38,8 @@ export const validateUserInput = (email, password) => {
   
   // New validation functions for verification flow
   export const validateProfileData = (data) => {
-    const { firstName, lastName, mobile, country, gender, currency } = data; // Changed phoneNumber to mobile
+    const { firstName, lastName, country, gender } = data;
+    const mobile = data.phoneNumber ?? data.mobile; // the app sends phoneNumber
     const errors = {};
   
     if (!firstName || firstName.trim().length < 2) {
@@ -50,20 +51,17 @@ export const validateUserInput = (email, password) => {
     }
   
     if (!validateMobileNumber(mobile)) {
-      errors.mobile = 'Please enter a valid international phone number (e.g., +1234567890)'; // Updated field name
+      errors.phoneNumber = 'Enter the number in international format, e.g. +233201234567';
     }
   
     if (!country) {
-      errors.country = 'Country is required';
+      errors.country = 'Choose your country';
     }
   
     if (!gender) {
-      errors.gender = 'Gender is required';
+      errors.gender = 'Choose your gender';
     }
   
-    if (!currency) {
-      errors.currency = 'Currency is required';
-    }
   
     return {
       valid: Object.keys(errors).length === 0,

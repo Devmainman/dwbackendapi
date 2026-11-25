@@ -25,11 +25,14 @@ export const getTransactions = async (req, res) => {
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 10));
     const userId = new mongoose.Types.ObjectId(String(req.user.id));
     const query = { userId };
-    if (typeof req.query.type === 'string' && req.query.type) query.type = req.query.type;
+    if (typeof req.query.type === 'string' && req.query.type) {
+      const types = req.query.type.split(',').map((x) => x.trim()).filter(Boolean).slice(0, 12);
+      query.type = types.length > 1 ? { $in: types } : types[0];
+    }
     const search = typeof req.query.search === 'string' ? req.query.search.trim().slice(0, 60) : '';
     if (search) {
       const re = new RegExp(escapeRegex(search), 'i');
-      query.$or = [{ reference: re }, { type: re }, { status: re }, { 'metadata.action': re }];
+      query.$or = [{ reference: re }, { type: re }, { status: re }, { 'metadata.action': re }, { 'metadata.description': re }, { 'metadata.coin': re }];
     }
 
     const [rows, total] = await Promise.all([
