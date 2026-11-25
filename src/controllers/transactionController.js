@@ -5,8 +5,9 @@ import Withdrawal from '../models/Withdrawal.js';
 import { escapeRegex } from '../utils/validation.js';
 
 // Money coming in to the user's balance (everything else is money going out or moving).
-const INFLOW = new Set(['deposit', 'admin_credit', 'referral_bonus']);
+const INFLOW = new Set(['deposit', 'admin_credit', 'referral_bonus', 'crypto_deposit']);
 const describe = (t) => {
+  if (t.type?.startsWith('crypto_') && t.metadata?.description) return t.metadata.description;
   const action = String(t.metadata?.action || '').replace(/_/g, ' ');
   const base = String(t.type || '').replace(/_/g, ' ');
   return action ? `${base} · ${action}` : base;
@@ -50,7 +51,7 @@ export const getTransactions = async (req, res) => {
         id: t._id,
         type: t.type,
         label: describe(t),
-        direction: INFLOW.has(t.type) ? 'in' : 'out',
+        direction: (t.type === 'crypto_convert' ? t.metadata?.direction === 'crypto_to_fiat' : INFLOW.has(t.type)) ? 'in' : 'out',
         amount: t.amount,
         currency: t.currency,
         status: t.status,

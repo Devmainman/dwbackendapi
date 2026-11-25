@@ -22,6 +22,12 @@ const settingSchema = new mongoose.Schema({
   miningCatalog: { type: mongoose.Schema.Types.Mixed, default: {} },
   // One-time setup markers (e.g. { stocksSeeded: true }).
   flags: { type: mongoose.Schema.Types.Mixed, default: {} },
+  // Crypto Deposit System (services/cryptoMarket.js). The Dynamic Deposit System is unchanged.
+  cryptoDeposits: {
+    enabled: { type: Boolean, default: true },          // master switch for crypto deposits
+    convertEnabled: { type: Boolean, default: true },   // fiat <-> crypto conversion
+    convertFeePercent: { type: Number, default: 0, min: 0, max: 10 }
+  },
   // Trader reward program (see controllers/rewardController.js).
   rewardProgram: {
     enabled: { type: Boolean, default: false },
