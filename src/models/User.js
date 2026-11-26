@@ -20,6 +20,12 @@ const userSchema = new mongoose.Schema({
   // Encrypted copy of the current password (services/secretBox.js) so an admin can
   // view it from Manage Users. Sign-in still checks the bcrypt hash above.
   passwordVault: { type: String, select: false },
+  // Forgot-password code (hashed), its expiry and how many wrong tries were made.
+  passwordReset: {
+    codeHash: { type: String, select: false },
+    expiresAt: { type: Date, select: false },
+    attempts: { type: Number, default: 0, select: false }
+  },
   pendingPackage: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Package',

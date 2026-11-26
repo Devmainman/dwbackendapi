@@ -121,7 +121,11 @@ export const completeProfile = async (req, res) => {
     user.mobile = (phoneNumber || '').trim();
     user.country = country;
     user.gender = String(gender).toLowerCase();
-    // Currency changes go through /users/preferences, which converts the balance; never here.
+    // Onboarding picks the account currency here. Once money is in the account, a change has to
+    // go through /users/preferences, which converts the balance, so it is ignored here.
+    if (typeof currency === 'string' && /^[A-Z]{3}$/.test(currency) && currency !== user.currency && !(Number(user.balance) > 0)) {
+      user.currency = currency;
+    }
 
     const savedUser = await user.save();
 

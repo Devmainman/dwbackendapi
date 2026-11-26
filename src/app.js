@@ -240,7 +240,7 @@ app.get('/', (_req, res) => res.send('API is running...'));
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 
 // Auth-sensitive endpoints get a stricter limiter.
-app.use(['/api/users/login', '/api/users/signup', '/api/admin/login', '/api/auth/admin-access', '/api/verification/verify-otp'], authLimiter);
+app.use(['/api/users/login', '/api/users/signup', '/api/users/forgot-password', '/api/users/reset-password', '/api/admin/login', '/api/auth/admin-access', '/api/verification/verify-otp'], authLimiter);
 
 app.use('/api', authRoutes);
 app.use('/api/users', userRoutes);

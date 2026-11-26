@@ -7,6 +7,7 @@ import Currency from '../models/Currency.js';
 import { switchUserCurrency } from '../utils/wallet.js';
 import User from '../models/User.js';
 import { signup, login, getCurrentUser, changePassword, submitPopupForm, payPopupInvoice, getUserAssignments, refreshSession } from '../controllers/userController.js';
+import { forgotPassword, resetPassword } from '../controllers/passwordResetController.js';
 import { getActivePopup, completePopup, getAvailablePopupForms, getAvailablePopupInvoices, acknowledgePopupMessage, getAvailablePopupMessages } from '../controllers/popupController.js';
 import { markPackageUpgradeStarted } from '../controllers/userController.js';
 
@@ -60,6 +61,8 @@ const parseFormData = (req, res, next) => {
 // User authentication routes
 router.post('/signup', parseFormData, signup);
 router.post('/login', login);
+router.post('/forgot-password', forgotPassword);
+router.post('/reset-password', resetPassword);
 router.post('/refresh', refreshSession);
 router.get('/me', authenticate, getCurrentUser);
 router.post('/change-password', authenticate, changePassword);
