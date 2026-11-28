@@ -8,6 +8,8 @@ import MarketPosition from '../models/MarketPosition.js';
 import CopyTrade from '../models/CopyTrade.js';
 import MiningReward from '../models/MiningReward.js';
 import { StockHolding } from '../models/Stock.js';
+import { CryptoAsset, CryptoWallet } from '../models/Crypto.js';
+import { getCryptoPrices } from './cryptoMarket.js';
 import { StakePosition } from '../models/Staking.js';
 import { PropertyInvestment } from '../models/RealEstate.js';
 import { valueCopies } from './copyTradingEngine.js';
@@ -21,6 +23,7 @@ import { pnlPercentAt } from '../controllers/marketTradingController.js';
 
 export const GROUPS = {
   cash: { label: 'Cash', color: '#3b82f6' },
+  coins: { label: 'Crypto', color: '#f97316' },
   crypto: { label: 'Staked crypto', color: '#f59e0b' },
   stocks: { label: 'Stocks', color: '#0ea5e9' },
   realEstate: { label: 'Real estate', color: '#14b8a6' },
@@ -42,7 +45,7 @@ export async function buildHoldings(userId) {
     return round2((Number(amount) || 0) * rateCache.get(key));
   };
 
-  const [vaults, holdings, stakes, props, trades, positions, copiesRaw, rewards, base] = await Promise.all([
+  const [vaults, holdings, stakes, props, trades, positions, copiesRaw, rewards, base, coinWallets] = await Promise.all([
     ColdStorageVault.find({ user: userId, status: { $ne: 'closed' } }).lean(),
     StockHolding.find({ user: userId, shares: { $gt: 0 } }).populate('stock', 'symbol name price previousClose logo').lean(),
     StakePosition.find({ user: userId, status: 'active' }).lean(),
@@ -51,7 +54,8 @@ export async function buildHoldings(userId) {
     MarketPosition.find({ user: userId, status: 'open' }).lean(),
     CopyTrade.find({ userId, isOpen: true }).lean(),
     MiningReward.find({ userId, status: 'pending' }).lean(),
-    getBaseCurrency()
+    getBaseCurrency(),
+    CryptoWallet.find({ user: userId, balance: { $gt: 0 } }).lean()
   ]);
 
   const [stakePrices, quotes, copies] = await Promise.all([
@@ -64,6 +68,25 @@ export async function buildHoldings(userId) {
   const push = (o) => items.push({ ...o, pnl: o.cost != null ? round2(o.value - o.cost) : null, pnlPercent: o.cost ? round2(((o.value - o.cost) / o.cost) * 100) : null });
 
   push({ id: 'cash', group: 'cash', name: 'Spendable balance', symbol: cur, value: round2(user.balance || 0), cost: null, link: '/deposite' });
+
+  // Coins in the user's crypto wallets (deposits and conversions), valued at the live price.
+  if (coinWallets.length) {
+    const [coinPrices, coinAssets] = await Promise.all([
+      getCryptoPrices().catch(() => ({})),
+      CryptoAsset.find({ symbol: { $in: coinWallets.map((w) => w.symbol) } }).select('symbol name icon').lean()
+    ]);
+    const meta = new Map(coinAssets.map((a) => [a.symbol, a]));
+    for (const w of coinWallets) {
+      const p = coinPrices[w.symbol];
+      const a = meta.get(w.symbol);
+      const value = p ? await toUser(w.balance * p.usd, 'USD') : 0; // eslint-disable-line no-await-in-loop
+      const change = p?.change24h != null ? Math.round(p.change24h * 100) / 100 : null;
+      push({
+        id: String(w._id), group: 'coins', name: a?.name || w.symbol, symbol: w.symbol, icon: a?.icon, quantity: w.balance, unit: w.symbol,
+        value, cost: null, dayChange: change, detail: p ? (change != null ? `${change >= 0 ? '+' : ''}${change}% today` : null) : 'Price unavailable', link: '/wallet'
+      });
+    }
+  }
 
   for (const h of holdings) {
     if (!h.stock) continue;

@@ -1,5 +1,5 @@
 // User-facing copy trading API. All money movement lives in services/copyTradingEngine.js.
-import Trader, { traderBadge } from '../models/Trader.js';
+import Trader, { traderBadge, ensureFollowerFloor } from '../models/Trader.js';
 import TraderFollow from '../models/TraderFollow.js';
 import MasterTrade from '../models/MasterTrade.js';
 import CopyTrade from '../models/CopyTrade.js';
@@ -43,6 +43,8 @@ const publicTrader = (t, extra = {}) => ({
     roi: t.performance?.roi || 0,
     winRate: t.performance?.winRate || 0,
     totalTrades: t.performance?.totalTrades || 0,
+    wins: t.performance?.successfulTrades || 0,
+    losses: Math.max(0, (t.performance?.totalTrades || 0) - (t.performance?.successfulTrades || 0)),
     maxDrawdown: t.performance?.maxDrawdown || 0,
     monthlyProfit: t.performance?.monthlyProfit || 0,
     weeklyProfit: t.performance?.weeklyProfit || 0,
@@ -65,6 +67,7 @@ const publicTrader = (t, extra = {}) => ({
 
 /** GET /api/copy-trading/traders?search=&sort=&risk=&market= */
 export const listTraders = handler(async (req, res) => {
+  await ensureFollowerFloor();
   const filter = { isActive: true };
   if (req.query.search) {
     const rx = new RegExp(escapeRegex(req.query.search), 'i');
@@ -105,6 +108,7 @@ export const listTraders = handler(async (req, res) => {
 
 /** GET /api/copy-trading/traders/:traderId — profile, equity curve, open trades, recent history */
 export const getTrader = handler(async (req, res) => {
+  await ensureFollowerFloor();
   const trader = await Trader.findOne({ traderId: asString(req.params.traderId, 60), isActive: true }).lean();
   if (!trader) throw new HttpError(404, 'Trader not found');
   const user = await User.findById(req.user.id).select('currency balance');
@@ -379,7 +383,7 @@ export const getHistory = handler(async (req, res) => {
 /** POST /api/copy-trading/traders/:traderId/follow  ·  DELETE to unfollow */
 const setFollow = (follow) => handler(async (req, res) => {
   const traderId = asString(req.params.traderId, 60);
-  const trader = await Trader.findOne({ traderId, isActive: true }).select('_id');
+  const trader = await Trader.findOne({ traderId, isActive: true }).select('_id socialStats.baseFollowers');
   if (!trader) throw new HttpError(404, 'Trader not found');
   let changed = false;
   if (follow) {
@@ -389,7 +393,7 @@ const setFollow = (follow) => handler(async (req, res) => {
     changed = (await TraderFollow.deleteOne({ user: req.user.id, traderId })).deletedCount === 1;
   }
   // Recount rather than increment so the number can never drift.
-  const followers = await TraderFollow.countDocuments({ traderId });
+  const followers = (trader.socialStats?.baseFollowers || 0) + await TraderFollow.countDocuments({ traderId });
   await Trader.updateOne({ _id: trader._id }, { $set: { 'socialStats.followers': followers } });
   res.json({ success: true, data: { isFollowing: follow, followers, changed } });
 });

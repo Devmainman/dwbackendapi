@@ -59,7 +59,8 @@ const traderSchema = new mongoose.Schema({
     activeCopiers: { type: Number, default: 0 },
     totalCopiers: { type: Number, default: 0 },
     totalCopiedAmount: { type: Number, default: 0 },
-    followers: { type: Number, default: 0, min: 0 },
+    followers: { type: Number, default: 0, min: 0 },      // shown total = baseFollowers + real follows
+    baseFollowers: { type: Number, default: 0, min: 0 },  // starting audience, at least MIN_FOLLOWERS
     rating: { type: Number, default: 0, min: 0, max: 5 }
   },
 
@@ -125,5 +126,41 @@ traderSchema.index({ 'performance.winRate': -1 });
 traderSchema.index({ 'socialStats.activeCopiers': -1 });
 traderSchema.index({ isActive: 1, verified: 1 });
 
+// Every trader shows at least 1.7k followers: each gets a starting audience between
+// MIN_FOLLOWERS and MAX_START_FOLLOWERS, and real follows are added on top.
+export const MIN_FOLLOWERS = 1700;
+const MAX_START_FOLLOWERS = 4800;
+export const startFollowers = () => MIN_FOLLOWERS + Math.floor(Math.random() * (MAX_START_FOLLOWERS - MIN_FOLLOWERS + 1));
+
+traderSchema.pre('save', function setStartFollowers(next) {
+  if (!this.socialStats) this.socialStats = {};
+  if ((this.socialStats.baseFollowers || 0) < MIN_FOLLOWERS) {
+    const old = this.socialStats.baseFollowers || 0;
+    const base = startFollowers();
+    this.socialStats.baseFollowers = base;
+    this.socialStats.followers = base + Math.max(0, (this.socialStats.followers || 0) - old);
+  }
+  next();
+});
+
 const Trader = mongoose.model('Trader', traderSchema);
+
+/** Gives traders created before the floor existed (or inserted without save hooks) their starting audience. Runs once per process. */
+let floorDone = null;
+export function ensureFollowerFloor() {
+  if (!floorDone) {
+    floorDone = (async () => {
+      const low = await Trader.find({ $or: [{ 'socialStats.baseFollowers': { $exists: false } }, { 'socialStats.baseFollowers': { $lt: MIN_FOLLOWERS } }] })
+        .select('traderId socialStats.baseFollowers').lean();
+      if (!low.length) return;
+      const { default: TraderFollow } = await import('./TraderFollow.js');
+      await Trader.bulkWrite(await Promise.all(low.map(async (t) => {
+        const base = startFollowers();
+        const real = await TraderFollow.countDocuments({ traderId: t.traderId });
+        return { updateOne: { filter: { _id: t._id }, update: { $set: { 'socialStats.baseFollowers': base, 'socialStats.followers': base + real } } } };
+      })));
+    })().catch((e) => { floorDone = null; console.error('ensureFollowerFloor failed', e.message); });
+  }
+  return floorDone;
+}
 export default Trader;

@@ -1,7 +1,7 @@
 // Admin copy trading API: manage traders, place/close their trades, oversee copies.
 // Money movement is delegated to services/copyTradingEngine.js.
 import path from 'path';
-import Trader from '../models/Trader.js';
+import Trader, { ensureFollowerFloor } from '../models/Trader.js';
 import User from '../models/User.js';
 import MasterTrade from '../models/MasterTrade.js';
 import CopyTrade from '../models/CopyTrade.js';
@@ -86,6 +86,7 @@ export const getAllTraders = handler(async (req, res) => {
 
   const sortable = ['joinedDate', 'username', 'performance.roi', 'performance.winRate', 'socialStats.activeCopiers', 'createdAt'];
   const sortBy = sortable.includes(req.query.sortBy) ? req.query.sortBy : 'joinedDate';
+  await ensureFollowerFloor();
   const [traders, total] = await Promise.all([
     Trader.find(query).sort({ [sortBy]: req.query.sortOrder === 'asc' ? 1 : -1 }).skip(skip).limit(limit).lean(),
     Trader.countDocuments(query)

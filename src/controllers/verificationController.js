@@ -433,6 +433,9 @@ export const uploadFaceImage = async (req, res) => {
     // Set the faceImage field with the resolved string
     user.verification.faceImage = imageName;
     user.verification.faceVerified = false;
+    user.verification.faceRejected = false;
+    user.verification.faceRevoked = false;
+    user.verification.faceRejectionReason = null;
 
     await user.save();
 

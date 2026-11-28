@@ -109,6 +109,7 @@ export const updateIdVerification = async (req, res) => {
         document.rejected = false;
         document.rejectionReason = null;
         document.processing = false;
+        document.revoked = false;
         user.verification.identityVerified = true;
         break;
       case 'reject':
@@ -116,6 +117,7 @@ export const updateIdVerification = async (req, res) => {
         document.rejected = true;
         document.rejectionReason = rejectionReason || 'Not specified';
         document.processing = false;
+        document.revoked = false;
         user.verification.identityVerified = false;
         break;
       case 'delete':
@@ -135,6 +137,7 @@ export const updateIdVerification = async (req, res) => {
         document.rejected = false;
         document.rejectionReason = null;
         document.processing = false;
+        document.revoked = true;
         user.verification.identityVerified = user.verification.identityDocuments.some(doc => doc.verified);
         break;
       case 'processing':
@@ -142,6 +145,7 @@ export const updateIdVerification = async (req, res) => {
         document.rejected = false;
         document.rejectionReason = null;
         document.processing = true;
+        document.revoked = false;
         user.verification.identityVerified = false;
         break;
     }
@@ -244,6 +248,7 @@ export const updateAddressVerification = async (req, res) => {
         proof.rejected = true;
         proof.rejectionReason = rejectionReason || 'Not specified';
         proof.processing = false;
+        proof.revoked = false;
         user.verification.addressVerified = false;
         break;
       case 'delete':
@@ -259,6 +264,7 @@ export const updateAddressVerification = async (req, res) => {
         proof.rejected = false;
         proof.rejectionReason = null;
         proof.processing = false;
+        proof.revoked = true;
         user.verification.addressVerified = false;
         break;
       case 'processing':
@@ -266,6 +272,7 @@ export const updateAddressVerification = async (req, res) => {
         proof.rejected = false;
         proof.rejectionReason = null;
         proof.processing = true;
+        proof.revoked = false;
         user.verification.addressVerified = false;
         break;
     }
@@ -348,6 +355,8 @@ export const updateFacialVerification = async (req, res) => {
     switch (action) {
       case 'approve':
       user.verification.faceVerified = true;
+      user.verification.faceRejected = false;
+      user.verification.faceRevoked = false;
       user.verification.faceVerificationStatus = 'VERIFIED';
       user.verification.faceRejectionReason = null;
       user.verification.faceProcessing = null;
@@ -355,6 +364,8 @@ export const updateFacialVerification = async (req, res) => {
 
     case 'reject':
       user.verification.faceVerified = false;
+      user.verification.faceRejected = true;
+      user.verification.faceRevoked = false;
       user.verification.faceVerificationStatus = 'REJECTED';
       user.verification.faceRejectionReason = rejectionReason;
       user.verification.faceProcessing = false;
@@ -376,6 +387,8 @@ export const updateFacialVerification = async (req, res) => {
 
     case 'revoke':
       user.verification.faceVerified = false;
+      user.verification.faceRejected = false;
+      user.verification.faceRevoked = true;
       user.verification.faceVerificationStatus = null;
       user.verification.faceRejectionReason = null;
       user.verification.faceProcessing = null;
@@ -383,6 +396,8 @@ export const updateFacialVerification = async (req, res) => {
 
     case 'processing':
       user.verification.faceVerified = false;
+      user.verification.faceRejected = false;
+      user.verification.faceRevoked = false;
       user.verification.faceVerificationStatus = null;
       user.verification.faceRejectionReason = null;
       user.verification.faceProcessing = true;

@@ -84,6 +84,7 @@ const userSchema = new mongoose.Schema({
     faceVerified: { type: Boolean, default: false },
     faceRejected: { type: Boolean, default: false },
     faceRejectionReason: { type: String, trim: true },
+    faceRevoked: { type: Boolean, default: false },
     faceProcessing: { type: Boolean, default: false },
     faceSubmittedAt: { type: Date },
     emailVerificationToken: { type: String },
@@ -97,6 +98,7 @@ const userSchema = new mongoose.Schema({
       verified: { type: Boolean, default: false },
       rejected: { type: Boolean, default: false },
       rejectionReason: { type: String, trim: true },
+      revoked: { type: Boolean, default: false },
       processing: { type: Boolean, default: false },
       uploadedAt: { type: Date, default: Date.now }
     }],
@@ -106,6 +108,7 @@ const userSchema = new mongoose.Schema({
       verified: { type: Boolean, default: false },
       rejected: { type: Boolean, default: false },
       rejectionReason: { type: String, trim: true },
+      revoked: { type: Boolean, default: false },
       processing: { type: Boolean, default: false },
       uploadedAt: { type: Date, default: Date.now }
     },

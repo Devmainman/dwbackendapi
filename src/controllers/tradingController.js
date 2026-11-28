@@ -1,6 +1,9 @@
 // "Trading Activities": the user's package trades and totals.
 import mongoose from 'mongoose';
 import Trade from '../models/Trade.js';
+import MarketPosition from '../models/MarketPosition.js';
+import CopyTrade from '../models/CopyTrade.js';
+import BotSubscription from '../models/BotSubscription.js';
 import User from '../models/User.js';
 import { round2 } from '../utils/money.js';
 import { HttpError } from '../utils/wallet.js';
@@ -42,24 +45,53 @@ export const createTrade = handler(async () => {
   throw new HttpError(410, 'Open trades from a trading package instead.');
 });
 
-/** GET /api/trading/total-profit — realised profit plus profit earned so far on running trades */
+// Totals cover every kind of trade the user makes: package trades, live trades,
+// copy trading and AI bots (all amounts are stored in the user's currency).
+const oid = (id) => new mongoose.Types.ObjectId(String(id));
+const sum = async (Model, match, field) => {
+  const [r] = await Model.aggregate([{ $match: match }, { $group: { _id: null, t: { $sum: `$${field}` } } }]);
+  return r?.t || 0;
+};
+
+/** GET /api/trading/total-profit — realised profit across all trading (plus running package trades). */
 export const getTotalProfit = handler(async (req, res) => {
   await settleMatured(req.user.id);
+  const uid = oid(req.user.id);
   const user = await User.findById(req.user.id).select('currency').lean();
   const trades = await Trade.find({ userId: req.user.id, status: { $in: ['in-progress', 'completed'] } });
   const now = new Date();
-  const totalProfit = round2(trades.reduce((s, t) => s + (t.status === 'completed' ? t.profit : tradeState(t, now).earned), 0));
-  res.json({ success: true, totalProfit, displayCurrency: user.currency });
+  const packages = round2(trades.reduce((acc, t) => acc + (t.status === 'completed' ? t.profit : tradeState(t, now).earned), 0));
+  const [live, copy, bots] = await Promise.all([
+    sum(MarketPosition, { user: uid, status: 'closed' }, 'pnl'),
+    sum(CopyTrade, { userId: uid }, 'realizedPnl'),
+    sum(BotSubscription, { user: uid, status: { $in: ['active', 'completed', 'stopped'] } }, 'totalPnl')
+  ]);
+  const breakdown = { packages, live: round2(live), copy: round2(copy), bots: round2(bots) };
+  const totalProfit = round2(packages + live + copy + bots);
+  res.json({ success: true, totalProfit, breakdown, displayCurrency: user.currency });
 });
 
-/** GET /api/trading/total-amount — stake currently working in running trades */
+/** GET /api/trading/total-amount — everything the user has put into trades, of every kind. */
 export const getTotalTradesAmount = handler(async (req, res) => {
+  const uid = oid(req.user.id);
   const user = await User.findById(req.user.id).select('currency').lean();
-  const [agg] = await Trade.aggregate([
-    { $match: { userId: new mongoose.Types.ObjectId(req.user.id), status: 'in-progress' } },
-    { $group: { _id: null, total: { $sum: '$amount' } } }
+  const [packages, live, copy, bots, activePackages, activeLive, activeCopy] = await Promise.all([
+    sum(Trade, { userId: uid, status: { $in: ['in-progress', 'completed'] } }, 'amount'),
+    sum(MarketPosition, { user: uid }, 'margin'),
+    sum(CopyTrade, { userId: uid }, 'amount'),
+    sum(BotSubscription, { user: uid, status: { $in: ['active', 'completed', 'stopped'] } }, 'allocation'),
+    sum(Trade, { userId: uid, status: 'in-progress' }, 'amount'),
+    sum(MarketPosition, { user: uid, status: 'open' }, 'margin'),
+    sum(CopyTrade, { userId: uid, status: { $ne: 'stopped' } }, 'amount')
   ]);
-  res.json({ success: true, totalAmount: round2(agg?.total || 0), displayCurrency: user.currency });
+  const breakdown = { packages: round2(packages), live: round2(live), copy: round2(copy), bots: round2(bots) };
+  res.json({
+    success: true,
+    totalAmount: round2(packages + live + copy + bots),
+    activeAmount: round2(activePackages + activeLive + activeCopy),
+    breakdown,
+    displayCurrency: user.currency
+  });
 });
 
 /** GET /api/trading/active */

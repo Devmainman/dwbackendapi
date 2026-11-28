@@ -1,6 +1,16 @@
 import User from '../models/User.js';
 import Transaction from '../models/Transaction.js';
 import Assignment from '../models/Assignment.js';
+import Currency from '../models/Currency.js';
+import Trade from '../models/Trade.js';
+import MarketPosition from '../models/MarketPosition.js';
+import CopyTrade from '../models/CopyTrade.js';
+import BotTrade from '../models/BotTrade.js';
+import Deposit from '../models/Deposit.js';
+import Withdrawal from '../models/Withdrawal.js';
+import UpgradeInvoice from '../models/UpgradeInvoice.js';
+import SignalInvoice from '../models/SignalInvoice.js';
+import { CryptoDeposit } from '../models/Crypto.js';
 
 export const getDashboardStats = async (req, res) => {
   try {
@@ -23,6 +33,14 @@ export const getDashboardStats = async (req, res) => {
     // Get pending assignments
     const pendingAssignments = await Assignment.countDocuments({ status: 'pending' });
 
+    // Every kind of trade users make: packages, live trades, copy trading and AI bot trades.
+    const [packageTrades, liveTrades, copyTrades, botTrades, totalCurrencies, deposits, cryptoDeposits, totalWithdrawals, upgradeInv, signalInv, totalReferrals] = await Promise.all([
+      Trade.countDocuments(), MarketPosition.countDocuments(), CopyTrade.countDocuments(), BotTrade.countDocuments(),
+      Currency.countDocuments(), Deposit.countDocuments(), CryptoDeposit.countDocuments(), Withdrawal.countDocuments(),
+      UpgradeInvoice.countDocuments({ status: 'pending' }), SignalInvoice.countDocuments({ status: 'pending' }),
+      User.countDocuments({ 'referral.referredBy': { $ne: null } })
+    ]);
+
     res.json({
       success: true,
       stats: {
@@ -31,7 +49,14 @@ export const getDashboardStats = async (req, res) => {
         inactiveUsers,
         totalBalance: totalBalance[0]?.total || 0,
         pendingAssignments,
-        recentTransactions
+        recentTransactions,
+        totalTrades: packageTrades + liveTrades + copyTrades + botTrades,
+        tradesByKind: { packages: packageTrades, live: liveTrades, copy: copyTrades, bots: botTrades },
+        totalCurrencies,
+        totalDeposits: deposits + cryptoDeposits,
+        totalWithdrawals,
+        submittedInvoices: upgradeInv + signalInv,
+        totalReferrals
       }
     });
   } catch (err) {

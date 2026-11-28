@@ -9,7 +9,7 @@ const INFLOW = new Set(['deposit', 'admin_credit', 'referral_bonus', 'crypto_dep
 const describe = (t) => {
   if (t.type?.startsWith('crypto_') && t.metadata?.description) return t.metadata.description;
   const action = String(t.metadata?.action || '').replace(/_/g, ' ');
-  const base = String(t.type || '').replace(/_/g, ' ');
+  const base = String(t.type || '').replace(/^admin_/, '').replace(/_/g, ' '); // 'admin_credit' shows as 'credit'
   return action ? `${base} · ${action}` : base;
 };
 

@@ -23,6 +23,7 @@ export const getSummary = handler(async (req, res) => {
   const stocks = h.items.filter((i) => i.group === 'stocks');
   const breakdown = {
     cash: sum('cash'),
+    crypto: sum('coins'),
     coldStorage: sum('coldStorage'),
     cards: sum('cards'),
     stocks: sum('stocks'),
